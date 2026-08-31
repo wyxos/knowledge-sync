@@ -1,0 +1,46 @@
+name: Test installers
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify first run and idempotency
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .tmp | Out-Null
+          Set-Content .tmp/bootstrap.md "# Bootstrap`n`nPrivate routing."
+          Set-Content .tmp/AGENTS.md "# Personal`n`nKeep this."
+          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
+          $first = Get-Content -Raw .tmp/AGENTS.md
+          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
+          $second = Get-Content -Raw .tmp/AGENTS.md
+          if ($first -cne $second -or $second -notmatch '# Personal' -or $second -notmatch '# Bootstrap') { exit 1 }
+
+  bash:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify syntax, first run, and idempotency
+        shell: bash
+        run: |
+          bash -n install.sh
+          mkdir -p .tmp
+          printf '# Bootstrap\n\nPrivate routing.\n' > .tmp/bootstrap.md
+          printf '# Personal\n\nKeep this.\n' > .tmp/AGENTS.md
+          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md
+          cp .tmp/AGENTS.md .tmp/first.md
+          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md
+          cmp .tmp/first.md .tmp/AGENTS.md
+          grep -q '# Personal' .tmp/AGENTS.md
+          grep -q '# Bootstrap' .tmp/AGENTS.md

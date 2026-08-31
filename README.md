@@ -1,0 +1,72 @@
+# Knowledge Sync
+
+Synchronize the private root bootstrap from a Knowledge MCP server into Codex's global `AGENTS.md`. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
+
+The Knowledge content and access token are never stored in this public repository.
+
+## Windows
+
+Download, inspect, and run:
+
+```powershell
+$path = Join-Path $env:TEMP 'knowledge-sync.ps1'
+irm https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.ps1 -OutFile $path
+Get-Content $path
+& $path
+```
+
+One-line invocation:
+
+```powershell
+irm https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.ps1 | iex
+```
+
+Specify another domain:
+
+```powershell
+& $path -Domain knowledge.example.com
+```
+
+## macOS and Linux
+
+Download, inspect, and run:
+
+```bash
+path="$(mktemp)"
+curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh -o "$path"
+less "$path"
+bash "$path"
+rm "$path"
+```
+
+One-line invocation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh | bash
+```
+
+Specify another domain:
+
+```bash
+bash "$path" --domain knowledge.example.com
+```
+
+Or pass arguments to a piped invocation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh | bash -s -- --domain knowledge.example.com
+```
+
+The default domain is `knowledge.test`. A domain ending in `.test` uses HTTP; other domains default to HTTPS. Set `KNOWLEDGE_MCP_TOKEN` to avoid the interactive token prompt. The Bash installer requires `curl` and `jq`.
+
+## Testing without a server
+
+Both installers accept a local bootstrap file and custom target:
+
+```powershell
+./install.ps1 -BootstrapFile ./bootstrap.md -Target ./tmp/AGENTS.md
+```
+
+```bash
+./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md
+```
