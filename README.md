@@ -59,14 +59,18 @@ curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.s
 
 The default domain is `knowledge.test`. A domain ending in `.test` uses HTTP; other domains default to HTTPS. Set `KNOWLEDGE_MCP_TOKEN` to avoid the interactive token prompt. The Bash installer requires `curl` and `jq`.
 
+The first successful run also installs a persistent `knowledge-sync` command in the current user's PowerShell profile, `.bashrc`, or `.zshrc`. Open a new shell and run `knowledge-sync` to refresh later. Pass `-NoAlias` or `--no-alias` to skip this setup.
+
+When no explicit target is supplied, the installer verifies that the `codex` command or Codex home directory exists before updating the global `AGENTS.md`.
+
 ## Testing without a server
 
 Both installers accept a local bootstrap file and custom target:
 
 ```powershell
-./install.ps1 -BootstrapFile ./bootstrap.md -Target ./tmp/AGENTS.md
+./install.ps1 -BootstrapFile ./bootstrap.md -Target ./tmp/AGENTS.md -NoAlias
 ```
 
 ```bash
-./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md
+./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias
 ```

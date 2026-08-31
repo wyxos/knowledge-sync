@@ -3,7 +3,8 @@ param(
     [string] $Domain = 'knowledge.test',
     [string] $Token = $env:KNOWLEDGE_MCP_TOKEN,
     [string] $Target,
-    [string] $BootstrapFile
+    [string] $BootstrapFile,
+    [switch] $NoAlias
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,8 +96,48 @@ function Merge-ManagedBlock([string] $Existing, [string] $Bootstrap) {
     return $Existing.Substring(0, $start) + $block + $Existing.Substring($after)
 }
 
+function Install-KnowledgeAlias([string] $DefaultDomain) {
+    $profilePath = if ($env:KNOWLEDGE_SYNC_PROFILE) { $env:KNOWLEDGE_SYNC_PROFILE } else { $PROFILE.CurrentUserAllHosts }
+    $profileDirectory = Split-Path -Parent $profilePath
+    $aliasStart = '# KNOWLEDGE-SYNC:BEGIN'
+    $aliasEnd = '# KNOWLEDGE-SYNC:END'
+    $escapedDomain = $DefaultDomain.Replace("'", "''")
+    $aliasBlock = @"
+$aliasStart
+function global:knowledge-sync {
+    param(
+        [string] `$Domain = '$escapedDomain',
+        [Parameter(ValueFromRemainingArguments = `$true)] [object[]] `$Arguments
+    )
+    `$headers = @{ Accept = 'application/vnd.github.raw+json'; 'User-Agent' = 'knowledge-sync' }
+    `$source = Invoke-RestMethod -Headers `$headers -Uri 'https://api.github.com/repos/wyxos/knowledge-sync/contents/install.ps1'
+    & ([scriptblock]::Create([string] `$source)) -Domain `$Domain -NoAlias @Arguments
+}
+$aliasEnd
+"@
+    $existingProfile = if (Test-Path -LiteralPath $profilePath) { Get-Content -Raw -LiteralPath $profilePath } else { '' }
+    $pattern = '(?s)' + [regex]::Escape($aliasStart) + '.*?' + [regex]::Escape($aliasEnd)
+    $updatedProfile = if ($existingProfile -match $pattern) {
+        [regex]::Replace($existingProfile, $pattern, $aliasBlock.TrimEnd())
+    } elseif ([string]::IsNullOrWhiteSpace($existingProfile)) {
+        $aliasBlock
+    } else {
+        $existingProfile.TrimEnd() + "`n`n" + $aliasBlock
+    }
+
+    if ($updatedProfile -ceq $existingProfile) { return }
+    if ($PSCmdlet.ShouldProcess($profilePath, 'Install persistent knowledge-sync command')) {
+        New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
+        [IO.File]::WriteAllText($profilePath, $updatedProfile, [Text.UTF8Encoding]::new($false))
+        Write-Host "Persistent command installed in [$profilePath]. Open a new PowerShell session, then run: knowledge-sync"
+    }
+}
+
 if (-not $Target) {
     $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
+    if (-not (Get-Command codex -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $codexHome)) {
+        throw 'Codex was not detected. Install Codex, set CODEX_HOME, or pass -Target explicitly.'
+    }
     $Target = Join-Path $codexHome 'AGENTS.md'
 }
 
@@ -129,3 +170,5 @@ if ($PSCmdlet.ShouldProcess($Target, 'Install Knowledge MCP bootstrap')) {
     }
     Write-Host "Knowledge bootstrap installed in [$Target]."
 }
+
+if (-not $NoAlias) { Install-KnowledgeAlias $Domain }

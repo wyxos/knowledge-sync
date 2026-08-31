@@ -18,11 +18,14 @@ jobs:
           New-Item -ItemType Directory -Force .tmp | Out-Null
           Set-Content .tmp/bootstrap.md "# Bootstrap`n`nPrivate routing."
           Set-Content .tmp/AGENTS.md "# Personal`n`nKeep this."
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
+          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias
           $first = Get-Content -Raw .tmp/AGENTS.md
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
+          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias
           $second = Get-Content -Raw .tmp/AGENTS.md
           if ($first -cne $second -or $second -notmatch '# Personal' -or $second -notmatch '# Bootstrap') { exit 1 }
+          $env:KNOWLEDGE_SYNC_PROFILE = "$PWD/.tmp/profile.ps1"
+          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
+          if ((Get-Content -Raw $env:KNOWLEDGE_SYNC_PROFILE) -notmatch 'function global:knowledge-sync') { exit 1 }
 
   bash:
     strategy:
@@ -38,9 +41,11 @@ jobs:
           mkdir -p .tmp
           printf '# Bootstrap\n\nPrivate routing.\n' > .tmp/bootstrap.md
           printf '# Personal\n\nKeep this.\n' > .tmp/AGENTS.md
-          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md
+          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias
           cp .tmp/AGENTS.md .tmp/first.md
-          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md
+          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias
           cmp .tmp/first.md .tmp/AGENTS.md
           grep -q '# Personal' .tmp/AGENTS.md
           grep -q '# Bootstrap' .tmp/AGENTS.md
+          KNOWLEDGE_SYNC_RC="$PWD/.tmp/shellrc" ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md
+          grep -q 'knowledge-sync()' .tmp/shellrc

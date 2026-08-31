@@ -6,6 +6,7 @@ token="${KNOWLEDGE_MCP_TOKEN:-}"
 target="${CODEX_HOME:-${HOME}/.codex}/AGENTS.md"
 bootstrap_file=""
 dry_run=0
+install_alias=1
 start_marker='<!-- KNOWLEDGE-MCP:BEGIN -->'
 end_marker='<!-- KNOWLEDGE-MCP:END -->'
 
@@ -16,12 +17,18 @@ while [[ $# -gt 0 ]]; do
     --target) target="$2"; shift 2 ;;
     --bootstrap-file) bootstrap_file="$2"; shift 2 ;;
     --dry-run) dry_run=1; shift ;;
+    --no-alias) install_alias=0; shift ;;
     -h|--help)
       printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$target" == "${CODEX_HOME:-${HOME}/.codex}/AGENTS.md" ]] && ! command -v codex >/dev/null 2>&1 && [[ ! -d "${CODEX_HOME:-${HOME}/.codex}" ]]; then
+  echo 'Codex was not detected. Install Codex, set CODEX_HOME, or pass --target explicitly.' >&2
+  exit 1
+fi
 
 resolve_base_url() {
   local value="${1%/}"
@@ -106,7 +113,40 @@ else
 fi
 
 rm -f "$existing_file" "$block_file"
-if [[ -f "$target" ]] && cmp -s "$target" "$output_file"; then rm -f "$output_file"; echo "Knowledge bootstrap is already current in [$target]."; exit 0; fi
+unchanged=0
+if [[ -f "$target" ]] && cmp -s "$target" "$output_file"; then unchanged=1; fi
 if [[ "$dry_run" == 1 ]]; then cat "$output_file"; rm -f "$output_file"; exit 0; fi
-mv -f "$output_file" "$target"
-echo "Knowledge bootstrap installed in [$target]."
+if [[ "$unchanged" == 1 ]]; then rm -f "$output_file"; echo "Knowledge bootstrap is already current in [$target]."
+else mv -f "$output_file" "$target"; echo "Knowledge bootstrap installed in [$target]."
+fi
+
+if [[ "$install_alias" == 1 ]]; then
+  shell_name="$(basename "${SHELL:-bash}")"
+  case "$shell_name" in
+    zsh) rc_file="$HOME/.zshrc" ;;
+    *) rc_file="$HOME/.bashrc" ;;
+  esac
+  rc_file="${KNOWLEDGE_SYNC_RC:-$rc_file}"
+  alias_start='# KNOWLEDGE-SYNC:BEGIN'
+  alias_end='# KNOWLEDGE-SYNC:END'
+  escaped_domain="${domain//\'/\'\\\'\'}"
+  alias_file="$(mktemp)"
+  cat > "$alias_file" <<EOF
+$alias_start
+knowledge-sync() {
+  curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh | bash -s -- --domain '$escaped_domain' --no-alias "\$@"
+}
+$alias_end
+EOF
+  touch "$rc_file"
+  rc_output="$(mktemp)"
+  awk -v start="$alias_start" -v end="$alias_end" -v block="$alias_file" '
+    $0 == start { while ((getline line < block) > 0) print line; skip=1; found=1; next }
+    $0 == end { skip=0; next }
+    !skip { print }
+    END { if (!found) { print ""; while ((getline line < block) > 0) print line } }
+  ' "$rc_file" > "$rc_output"
+  mv -f "$rc_output" "$rc_file"
+  rm -f "$alias_file"
+  echo "Persistent command installed in [$rc_file]. Open a new shell, then run: knowledge-sync"
+fi
