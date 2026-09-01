@@ -249,7 +249,7 @@ $aliasEnd
     }
 
     if ($updatedProfile -ceq $existingProfile) { return }
-    if ($PSCmdlet.ShouldProcess($profilePath, 'Install persistent knowledge-sync command')) {
+    if ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($profilePath, 'Install persistent knowledge-sync command')) {
         New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
         [IO.File]::WriteAllText($profilePath, $updatedProfile, [Text.UTF8Encoding]::new($false))
         Write-Host "Persistent command installed in [$profilePath]. Open a new PowerShell session, then run: knowledge-sync"
@@ -278,7 +278,7 @@ $existing = if (Test-Path -LiteralPath $Target) { Get-Content -Raw -LiteralPath 
 $updated = Merge-ManagedBlock $existing $bootstrap
 if ($updated -ceq $existing) {
     Write-Host "Knowledge bootstrap is already current in [$Target]."
-} elseif ($PSCmdlet.ShouldProcess($Target, 'Install Knowledge MCP bootstrap')) {
+} elseif ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($Target, 'Install Knowledge MCP bootstrap')) {
     $directory = Split-Path -Parent $Target
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $temporary = Join-Path $directory ('.knowledge-agents-' + [Guid]::NewGuid().ToString('N') + '.tmp')

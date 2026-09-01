@@ -27,6 +27,15 @@ jobs:
           ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md
           if ((Get-Content -Raw $env:KNOWLEDGE_SYNC_PROFILE) -notmatch 'function global:knowledge-sync') { exit 1 }
 
+          # The documented `irm <url> | iex` form has no script command context,
+          # so `$PSCmdlet` is null. Exercise that invocation mode offline.
+          $inline = Get-Content -Raw ./install.ps1
+          $inline = $inline.Replace('[string] $Target,', "[string] `$Target = '$PWD/.tmp/inline-AGENTS.md',")
+          $inline = $inline.Replace('[string] $BootstrapFile,', "[string] `$BootstrapFile = '$PWD/.tmp/bootstrap.md',")
+          $inline = $inline.Replace('[switch] $NoAlias', '[switch] $NoAlias = $true')
+          $inline | Invoke-Expression
+          if ((Get-Content -Raw .tmp/inline-AGENTS.md) -notmatch '# Bootstrap') { exit 1 }
+
   bash:
     strategy:
       matrix:
