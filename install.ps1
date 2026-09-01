@@ -18,6 +18,130 @@ function Resolve-KnowledgeBaseUrl([string] $Value) {
     return "https://$Value"
 }
 
+function ConvertTo-Base64Url([byte[]] $Bytes) {
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Get-OAuthStorePath([string] $BaseUrl) {
+    $key = (ConvertTo-Base64Url ([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($BaseUrl)))).Substring(0, 16)
+    return Join-Path (Join-Path $HOME '.knowledge-sync') "oauth-$key.dat"
+}
+
+function Save-OAuthCredentials([string] $Path, [object] $Credentials) {
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $plain = [Text.Encoding]::UTF8.GetBytes(($Credentials | ConvertTo-Json -Depth 10 -Compress))
+    $protected = [Security.Cryptography.ProtectedData]::Protect($plain, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+    [IO.File]::WriteAllText($Path, [Convert]::ToBase64String($protected), [Text.UTF8Encoding]::new($false))
+}
+
+function Read-OAuthCredentials([string] $Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $protected = [Convert]::FromBase64String((Get-Content -Raw -LiteralPath $Path))
+        $plain = [Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+        return [Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json
+    } catch {
+        Write-Warning "Stored OAuth credentials could not be read and will be replaced."
+        return $null
+    }
+}
+
+function Invoke-OAuthTokenRequest([string] $Endpoint, [hashtable] $Body) {
+    return Invoke-RestMethod -Uri $Endpoint -Method Post -ContentType 'application/x-www-form-urlencoded' -Body $Body
+}
+
+function Save-TokenResponse([string] $StorePath, [object] $Response, [string] $ClientId, [string] $ClientSecret, [string] $TokenEndpoint, [string] $Resource) {
+    $credentials = [ordered]@{
+        access_token = [string] $Response.access_token
+        refresh_token = [string] $Response.refresh_token
+        expires_at = [DateTimeOffset]::UtcNow.AddSeconds([int] $Response.expires_in).ToUnixTimeSeconds()
+        client_id = $ClientId
+        client_secret = $ClientSecret
+        token_endpoint = $TokenEndpoint
+        resource = $Resource
+    }
+    Save-OAuthCredentials $StorePath $credentials
+    return $credentials
+}
+
+function Get-OAuthAccessToken([string] $BaseUrl) {
+    $storePath = Get-OAuthStorePath $BaseUrl
+    $stored = Read-OAuthCredentials $storePath
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($stored -and $stored.access_token -and [long] $stored.expires_at -gt ($now + 60)) {
+        return [string] $stored.access_token
+    }
+    if ($stored -and $stored.refresh_token) {
+        try {
+            $body = @{
+                grant_type = 'refresh_token'; refresh_token = [string] $stored.refresh_token
+                client_id = [string] $stored.client_id; resource = [string] $stored.resource
+            }
+            if ($stored.client_secret) { $body.client_secret = [string] $stored.client_secret }
+            $refreshed = Invoke-OAuthTokenRequest ([string] $stored.token_endpoint) $body
+            return [string] (Save-TokenResponse $storePath $refreshed ([string] $stored.client_id) ([string] $stored.client_secret) ([string] $stored.token_endpoint) ([string] $stored.resource)).access_token
+        } catch {
+            Write-Warning 'The saved OAuth session could not be refreshed; signing in again.'
+        }
+    }
+
+    $resourceMetadata = Invoke-RestMethod -Uri "$BaseUrl/.well-known/oauth-protected-resource/mcp/knowledge"
+    $resource = [string] $resourceMetadata.resource
+    $issuer = [string] @($resourceMetadata.authorization_servers)[0]
+    $metadata = Invoke-RestMethod -Uri "$($issuer.TrimEnd('/'))/.well-known/oauth-authorization-server"
+
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = ([Net.IPEndPoint] $listener.LocalEndpoint).Port
+    $redirectUri = "http://127.0.0.1:$port/callback"
+    $registration = Invoke-RestMethod -Uri $metadata.registration_endpoint -Method Post -ContentType 'application/json' -Body (@{
+        client_name = 'Knowledge Sync'; redirect_uris = @($redirectUri)
+        grant_types = @('authorization_code', 'refresh_token'); response_types = @('code')
+        token_endpoint_auth_method = 'client_secret_post'; application_type = 'native'; scope = 'mcp:use'
+    } | ConvertTo-Json -Depth 5 -Compress)
+
+    $verifier = ConvertTo-Base64Url ([Security.Cryptography.RandomNumberGenerator]::GetBytes(64))
+    $challenge = ConvertTo-Base64Url ([Security.Cryptography.SHA256]::HashData([Text.Encoding]::ASCII.GetBytes($verifier)))
+    $state = ConvertTo-Base64Url ([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    $query = @{
+        response_type = 'code'; client_id = [string] $registration.client_id; redirect_uri = $redirectUri
+        state = $state; code_challenge = $challenge; code_challenge_method = 'S256'; scope = 'mcp:use'; resource = $resource
+    }.GetEnumerator() | ForEach-Object { "$([uri]::EscapeDataString($_.Key))=$([uri]::EscapeDataString([string] $_.Value))" }
+    $authorizeUrl = [string] $metadata.authorization_endpoint + '?' + ($query -join '&')
+    Write-Host 'Opening the browser to authenticate Knowledge Sync...'
+    Start-Process $authorizeUrl -WhatIf:$false
+
+    try {
+        $accept = $listener.AcceptTcpClientAsync()
+        if (-not $accept.Wait([TimeSpan]::FromMinutes(5))) { throw 'OAuth authentication timed out.' }
+        $connection = $accept.Result
+        $reader = [IO.StreamReader]::new($connection.GetStream(), [Text.Encoding]::ASCII, $false, 1024, $true)
+        $requestLine = $reader.ReadLine()
+        $requestTarget = ($requestLine -split ' ')[1]
+        $callback = [Uri] "http://127.0.0.1$requestTarget"
+        $parameters = [Web.HttpUtility]::ParseQueryString($callback.Query)
+        $message = if ($parameters['code']) { 'Authentication complete. You can close this window.' } else { 'Authentication failed. Return to the terminal.' }
+        $bodyBytes = [Text.Encoding]::UTF8.GetBytes($message)
+        $responseBytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n")
+        $connection.GetStream().Write($responseBytes, 0, $responseBytes.Length)
+        $connection.GetStream().Write($bodyBytes, 0, $bodyBytes.Length)
+        $connection.Close()
+    } finally {
+        $listener.Stop()
+    }
+    if ($parameters['state'] -ne $state) { throw 'OAuth state did not match.' }
+    if (-not $parameters['code']) { throw "OAuth authorization failed: $($parameters['error'])" }
+
+    $tokenBody = @{
+        grant_type = 'authorization_code'; code = [string] $parameters['code']; redirect_uri = $redirectUri
+        code_verifier = $verifier; client_id = [string] $registration.client_id; resource = $resource
+    }
+    if ($registration.client_secret) { $tokenBody.client_secret = [string] $registration.client_secret }
+    $tokenResponse = Invoke-OAuthTokenRequest ([string] $metadata.token_endpoint) $tokenBody
+    return [string] (Save-TokenResponse $storePath $tokenResponse ([string] $registration.client_id) ([string] $registration.client_secret) ([string] $metadata.token_endpoint) $resource).access_token
+}
+
 function Read-McpJson([string] $Body, [int] $Id) {
     $candidates = @($Body -split "`r?`n" | ForEach-Object {
         if ($_ -match '^data:\s*(.+)$') { $Matches[1] }
@@ -145,10 +269,7 @@ if ($BootstrapFile) {
     $bootstrap = Get-Content -Raw -LiteralPath $BootstrapFile
 } else {
     if (-not $Token) {
-        $secureToken = Read-Host 'Knowledge MCP access token' -AsSecureString
-        $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-        try { $Token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
-        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+        $Token = Get-OAuthAccessToken (Resolve-KnowledgeBaseUrl $Domain)
     }
     $baseUrl = Resolve-KnowledgeBaseUrl $Domain
     $bootstrap = Get-KnowledgeBootstrap "$baseUrl/mcp/knowledge" $Token

@@ -57,7 +57,11 @@ Or pass arguments to a piped invocation:
 curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh | bash -s -- --domain knowledge.example.com
 ```
 
-The default domain is `knowledge.test`. A domain ending in `.test` uses HTTP; other domains default to HTTPS. Set `KNOWLEDGE_MCP_TOKEN` to avoid the interactive token prompt. The Bash installer requires `curl` and `jq`.
+The default domain is `knowledge.test`. A domain ending in `.test` uses HTTP; other domains default to HTTPS.
+
+On first use, the installer opens the Knowledge OAuth authorization page in your browser. After approval, Windows protects the credentials with DPAPI, macOS uses Keychain, and Linux uses Secret Service when `secret-tool` is available. Linux falls back to a user-readable-only file with an explicit warning when no keyring CLI exists. Later runs reuse or refresh the OAuth session automatically.
+
+`KNOWLEDGE_MCP_TOKEN` and the explicit token options remain available for headless automation. The Bash installer requires `curl`, `jq`, `openssl`, and `python3` for interactive OAuth.
 
 The first successful run also installs a persistent `knowledge-sync` command in the current user's PowerShell profile, `.bashrc`, or `.zshrc`. Open a new shell and run `knowledge-sync` to refresh later. Pass `-NoAlias` or `--no-alias` to skip this setup.
 
