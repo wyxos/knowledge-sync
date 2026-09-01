@@ -65,6 +65,8 @@ On first use, the installer opens the Knowledge OAuth authorization page in your
 
 The first successful run also installs a persistent `knowledge-sync` command in the current user's PowerShell profile, `.bashrc`, or `.zshrc`. Open a new shell and run `knowledge-sync` to refresh later. Pass `-NoAlias` or `--no-alias` to skip this setup.
 
+When the Codex CLI is available, the installer also checks for a global MCP server named `knowledge`. It registers the server at `<domain>/mcp/knowledge` when missing, leaves an identical registration unchanged, and refuses to overwrite a same-named server with a different URL. Codex starts its OAuth flow during registration when the server requires authentication. Pass `-NoCodexMcp` or `--no-codex-mcp` to skip MCP registration.
+
 When no explicit target is supplied, the installer verifies that the `codex` command or Codex home directory exists before updating the global `AGENTS.md`.
 
 ## Testing without a server

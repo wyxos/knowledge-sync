@@ -4,7 +4,8 @@ param(
     [string] $Token = $env:KNOWLEDGE_MCP_TOKEN,
     [string] $Target,
     [string] $BootstrapFile,
-    [switch] $NoAlias
+    [switch] $NoAlias,
+    [switch] $NoCodexMcp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,34 @@ function Resolve-KnowledgeBaseUrl([string] $Value) {
     $Value = $Value.Trim().TrimEnd('/')
     if ($Value -match '^https?://') { return $Value }
     return "https://$Value"
+}
+
+function Install-CodexMcp([string] $McpUrl) {
+    $codex = Get-Command codex -ErrorAction SilentlyContinue
+    if (-not $codex) {
+        Write-Warning 'Codex CLI was not found; skipped Knowledge MCP registration.'
+        return
+    }
+
+    $existingJson = & $codex.Source mcp get knowledge --json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $existingJson) {
+        $existing = ($existingJson -join "`n") | ConvertFrom-Json
+        $existingUrl = [string] $existing.transport.url
+        if ($existing.transport.type -ne 'streamable_http' -or $existingUrl.TrimEnd('/') -ne $McpUrl.TrimEnd('/')) {
+            throw "Codex already has an MCP server named [knowledge] configured for [$existingUrl]. Refusing to replace it with [$McpUrl]."
+        }
+        Write-Host "Knowledge MCP is already registered in Codex at [$existingUrl]."
+        return
+    }
+
+    if ($WhatIfPreference) {
+        Write-Host "What if: Register Knowledge MCP in Codex at [$McpUrl]."
+        return
+    }
+
+    & $codex.Source mcp add knowledge --url $McpUrl
+    if ($LASTEXITCODE -ne 0) { throw 'Codex could not register the Knowledge MCP server.' }
+    Write-Host 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
 }
 
 function ConvertTo-Base64Url([byte[]] $Bytes) {
@@ -292,3 +321,4 @@ if ($updated -ceq $existing) {
 }
 
 if (-not $NoAlias) { Install-KnowledgeAlias $Domain }
+if (-not $NoCodexMcp) { Install-CodexMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }

@@ -7,6 +7,7 @@ target="${CODEX_HOME:-${HOME}/.codex}/AGENTS.md"
 bootstrap_file=""
 dry_run=0
 install_alias=1
+install_codex_mcp=1
 start_marker='<!-- KNOWLEDGE-MCP:BEGIN -->'
 end_marker='<!-- KNOWLEDGE-MCP:END -->'
 
@@ -18,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     --bootstrap-file) bootstrap_file="$2"; shift 2 ;;
     --dry-run) dry_run=1; shift ;;
     --no-alias) install_alias=0; shift ;;
+    --no-codex-mcp) install_codex_mcp=0; shift ;;
     -h|--help)
       printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH]'
       exit 0 ;;
@@ -29,6 +31,33 @@ if [[ "$target" == "${CODEX_HOME:-${HOME}/.codex}/AGENTS.md" ]] && ! command -v 
   echo 'Codex was not detected. Install Codex, set CODEX_HOME, or pass --target explicitly.' >&2
   exit 1
 fi
+
+install_codex_mcp_server() {
+  local mcp_url="$1" existing_json existing_url existing_type
+  if ! command -v codex >/dev/null 2>&1; then
+    echo 'Warning: Codex CLI was not found; skipped Knowledge MCP registration.' >&2
+    return
+  fi
+
+  if existing_json="$(codex mcp get knowledge --json 2>/dev/null)"; then
+    existing_url="$(jq -r '.transport.url // ""' <<<"$existing_json")"
+    existing_type="$(jq -r '.transport.type // ""' <<<"$existing_json")"
+    if [[ "$existing_type" != streamable_http || "${existing_url%/}" != "${mcp_url%/}" ]]; then
+      echo "Codex already has an MCP server named [knowledge] configured for [$existing_url]. Refusing to replace it with [$mcp_url]." >&2
+      exit 1
+    fi
+    echo "Knowledge MCP is already registered in Codex at [$existing_url]."
+    return
+  fi
+
+  if [[ "$dry_run" == 1 ]]; then
+    echo "Would register Knowledge MCP in Codex at [$mcp_url]."
+    return
+  fi
+
+  codex mcp add knowledge --url "$mcp_url"
+  echo 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
+}
 
 resolve_base_url() {
   local value="${1%/}"
@@ -275,4 +304,8 @@ EOF
   mv -f "$rc_output" "$rc_file"
   rm -f "$alias_file"
   echo "Persistent command installed in [$rc_file]. Open a new shell, then run: knowledge-sync"
+fi
+
+if [[ "$install_codex_mcp" == 1 ]]; then
+  install_codex_mcp_server "$(resolve_base_url "$domain")/mcp/knowledge"
 fi
