@@ -33,7 +33,6 @@ fi
 resolve_base_url() {
   local value="${1%/}"
   if [[ "$value" =~ ^https?:// ]]; then printf '%s' "$value"
-  elif [[ "$value" == *.test ]]; then printf 'http://%s' "$value"
   else printf 'https://%s' "$value"
   fi
 }

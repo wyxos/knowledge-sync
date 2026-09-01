@@ -57,7 +57,7 @@ Or pass arguments to a piped invocation:
 curl -fsSL https://raw.githubusercontent.com/wyxos/knowledge-sync/main/install.sh | bash -s -- --domain knowledge.example.com
 ```
 
-The default domain is `knowledge.test`. A domain ending in `.test` uses HTTP; other domains default to HTTPS.
+The default domain is `knowledge.test`. Domains without a scheme use HTTPS. Pass an explicit `http://` URL only for an HTTP-only development server.
 
 On first use, the installer opens the Knowledge OAuth authorization page in your browser. After approval, Windows protects the credentials with DPAPI, macOS uses Keychain, and Linux uses Secret Service when `secret-tool` is available. Linux falls back to a user-readable-only file with an explicit warning when no keyring CLI exists. Later runs reuse or refresh the OAuth session automatically.
 

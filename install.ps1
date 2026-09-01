@@ -14,7 +14,6 @@ $EndMarker = '<!-- KNOWLEDGE-MCP:END -->'
 function Resolve-KnowledgeBaseUrl([string] $Value) {
     $Value = $Value.Trim().TrimEnd('/')
     if ($Value -match '^https?://') { return $Value }
-    if ($Value.EndsWith('.test')) { return "http://$Value" }
     return "https://$Value"
 }
 
@@ -29,7 +28,7 @@ function Get-OAuthStorePath([string] $BaseUrl) {
 
 function Save-OAuthCredentials([string] $Path, [object] $Credentials) {
     $directory = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    New-Item -ItemType Directory -Force -Path $directory -WhatIf:$false | Out-Null
     $plain = [Text.Encoding]::UTF8.GetBytes(($Credentials | ConvertTo-Json -Depth 10 -Compress))
     $protected = [Security.Cryptography.ProtectedData]::Protect($plain, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
     [IO.File]::WriteAllText($Path, [Convert]::ToBase64String($protected), [Text.UTF8Encoding]::new($false))
@@ -195,7 +194,7 @@ function Get-KnowledgeBootstrap([string] $Url, [string] $AccessToken) {
     if ($called.error) { throw "bootstrap_context failed: $($called.error.message)" }
     if ($called.result.isError) { throw 'bootstrap_context returned an MCP tool error.' }
 
-    $parts = @($called.result.content | Where-Object type -eq 'text' | ForEach-Object text)
+    $parts = @($called.result.content | Where-Object type -eq 'text' | ForEach-Object { $_.text })
     return ($parts -join '').Trim()
 }
 
