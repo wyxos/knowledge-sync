@@ -189,11 +189,14 @@ PY
 }
 
 mcp_post() {
-  local payload="$1"
+  local payload="$1" machine_os
+  machine_os="$(uname -s)"
+  [[ "$machine_os" != Darwin ]] || machine_os=Mac
   local curl_headers=(
     -H 'Accept: application/json, text/event-stream'
     -H 'Content-Type: application/json'
     -H "Authorization: Bearer ${token}"
+    -H "X-Knowledge-Machine: $machine_os - $(hostname -s)"
   )
   [[ -z "$session_id" ]] || curl_headers+=(-H "MCP-Session-Id: ${session_id}")
   [[ -z "$protocol_version" ]] || curl_headers+=(-H "MCP-Protocol-Version: ${protocol_version}")

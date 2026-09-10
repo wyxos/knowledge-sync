@@ -195,6 +195,7 @@ function Get-KnowledgeBootstrap([string] $Url, [string] $AccessToken) {
     $headers = @{
         Accept = 'application/json, text/event-stream'
         Authorization = "Bearer $AccessToken"
+        'X-Knowledge-Machine' = 'Windows - ' + [Environment]::MachineName
     }
     $initialize = Invoke-McpRequest $Url $headers @{
         jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{
