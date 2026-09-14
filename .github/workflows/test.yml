@@ -12,19 +12,24 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Cursor account rules and migration offline
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Verify first run and idempotency
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force .tmp | Out-Null
           Set-Content .tmp/bootstrap.md "# Bootstrap`n`nPrivate routing."
           Set-Content .tmp/AGENTS.md "# Personal`n`nKeep this."
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
           $first = Get-Content -Raw .tmp/AGENTS.md
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
           $second = Get-Content -Raw .tmp/AGENTS.md
           if ($first -cne $second -or $second -notmatch '# Personal' -or $second -notmatch '# Bootstrap') { exit 1 }
           $env:KNOWLEDGE_SYNC_PROFILE = "$PWD/.tmp/profile.ps1"
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoCodexMcp -NoCursorMcp
           if ((Get-Content -Raw $env:KNOWLEDGE_SYNC_PROFILE) -notmatch 'function global:knowledge-sync') { exit 1 }
 
           # The documented `irm <url> | iex` form has no script command context,
@@ -42,17 +47,13 @@ jobs:
           $env:CURSOR_HOME = "$PWD/.tmp/cursor-home"
           New-Item -ItemType Directory -Force .tmp/codex-home, .tmp/cursor-home | Out-Null
           Set-Content .tmp/codex-home/AGENTS.md "# Codex personal`n`nKeep this."
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
           $codexAgents = Get-Content -Raw .tmp/codex-home/AGENTS.md
-          $cursorRule = Get-Content -Raw .tmp/cursor-home/rules/knowledge-mcp.mdc
           $cursorMcp = Get-Content -Raw .tmp/cursor-home/mcp.json | ConvertFrom-Json
           if ($codexAgents -notmatch '# Codex personal' -or $codexAgents -notmatch '# Bootstrap') { exit 1 }
-          if ($cursorRule -notmatch 'alwaysApply: true' -or $cursorRule -notmatch '# Bootstrap') { exit 1 }
           if ($cursorMcp.mcpServers.knowledge.url -ne 'https://knowledge.test/mcp/knowledge') { exit 1 }
-          Copy-Item .tmp/cursor-home/rules/knowledge-mcp.mdc .tmp/cursor-first.mdc
           Copy-Item .tmp/cursor-home/mcp.json .tmp/cursor-mcp-first.json
-          ./install.ps1 -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
-          if ((Get-Content -Raw .tmp/cursor-home/rules/knowledge-mcp.mdc) -cne (Get-Content -Raw .tmp/cursor-first.mdc)) { exit 1 }
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
           if ((Get-Content -Raw .tmp/cursor-home/mcp.json) -cne (Get-Content -Raw .tmp/cursor-mcp-first.json)) { exit 1 }
 
           $env:CURSOR_HOME = "$PWD/.tmp/cursor-conflict"
@@ -60,7 +61,7 @@ jobs:
           Set-Content .tmp/cursor-conflict/mcp.json '{"mcpServers":{"knowledge":{"url":"https://other.example/mcp"}}}'
           $ErrorActionPreference = 'Stop'
           try {
-            ./install.ps1 -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp
+            ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp
             throw 'expected Cursor MCP URL conflict to fail'
           } catch {
             if ("$_" -notmatch 'Refusing to replace') { throw }
@@ -77,6 +78,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Cursor account rules and migration offline
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Verify syntax, first run, and idempotency
         shell: bash
         run: |
@@ -84,35 +90,31 @@ jobs:
           mkdir -p .tmp
           printf '# Bootstrap\n\nPrivate routing.\n' > .tmp/bootstrap.md
           printf '# Personal\n\nKeep this.\n' > .tmp/AGENTS.md
-          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
+          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
           cp .tmp/AGENTS.md .tmp/first.md
-          ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
+          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
           cmp .tmp/first.md .tmp/AGENTS.md
           grep -q '# Personal' .tmp/AGENTS.md
           grep -q '# Bootstrap' .tmp/AGENTS.md
-          KNOWLEDGE_SYNC_RC="$PWD/.tmp/shellrc" ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-codex-mcp --no-cursor-mcp
+          KNOWLEDGE_SYNC_RC="$PWD/.tmp/shellrc" ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-codex-mcp --no-cursor-mcp
           grep -q 'knowledge-sync()' .tmp/shellrc
 
           mkdir -p .tmp/codex-home .tmp/cursor-home
           printf '# Codex personal\n\nKeep this.\n' > .tmp/codex-home/AGENTS.md
           CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" \
-            ./install.sh --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
           grep -q '# Codex personal' .tmp/codex-home/AGENTS.md
           grep -q '# Bootstrap' .tmp/codex-home/AGENTS.md
-          grep -q 'alwaysApply: true' .tmp/cursor-home/rules/knowledge-mcp.mdc
-          grep -q '# Bootstrap' .tmp/cursor-home/rules/knowledge-mcp.mdc
           grep -q 'https://knowledge.test/mcp/knowledge' .tmp/cursor-home/mcp.json
-          cp .tmp/cursor-home/rules/knowledge-mcp.mdc .tmp/cursor-first.mdc
           cp .tmp/cursor-home/mcp.json .tmp/cursor-mcp-first.json
           CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" \
-            ./install.sh --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
-          cmp .tmp/cursor-first.mdc .tmp/cursor-home/rules/knowledge-mcp.mdc
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
           cmp .tmp/cursor-mcp-first.json .tmp/cursor-home/mcp.json
 
           mkdir -p .tmp/cursor-conflict
           printf '%s\n' '{"mcpServers":{"knowledge":{"url":"https://other.example/mcp"}}}' > .tmp/cursor-conflict/mcp.json
           if CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-conflict" \
-            ./install.sh --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp; then
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp; then
             exit 1
           fi
       - name: Verify Cursor configuration safety and preview

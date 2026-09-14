@@ -1,6 +1,6 @@
 # Knowledge Sync
 
-Synchronize the private root bootstrap from a Knowledge MCP server for detected Codex and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). For Cursor, the installer saves a bootstrap file at `~/.cursor/rules/knowledge-mcp.mdc`; connect it through a Cursor User Rule as described below. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
+Synchronize the private root bootstrap from a Knowledge MCP server for detected Codex and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). Cursor receives a dedicated **Knowledge MCP bootstrap** User Rule in its signed-in account, applying across projects and syncing across devices. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
 
 The Knowledge content and access token are never stored in this public repository.
 
@@ -69,15 +69,21 @@ When the Codex CLI is available, the installer also checks for a global MCP serv
 
 When Cursor is detected (`agent`, `cursor-agent`, `cursor`, or the Cursor home directory), the installer registers the same Knowledge MCP URL in `~/.cursor/mcp.json`. An identical registration is left unchanged; a same-named server with a different URL is refused. Authenticate afterward in Cursor, or run `agent mcp login knowledge`. Pass `-NoCursorMcp` or `--no-cursor-mcp` to skip Cursor MCP registration.
 
-Cursor's [documented global rules](https://cursor.com/docs/rules) are User Rules configured in Settings / Customize > Rules. Saving a file under the home `.cursor/rules` directory alone does not establish that it will load automatically. Add this User Rule once, replacing the path with the absolute path printed by the installer:
+### Cursor User Rule setup
 
-```text
-At the start of each conversation, read C:/Users/YOUR_USER/.cursor/rules/knowledge-mcp.mdc and apply its Knowledge bootstrap instructions before task-specific work.
-```
+Open Cursor desktop and sign in before running the installer. Python 3.8+ is required on every platform for account rule setup. The installer reads Cursor's existing sign-in from its local database in read-only mode and sends it only to Cursor's HTTPS account service. Credentials are never printed or saved by this step.
 
-On macOS or Linux, use `/Users/YOUR_USER/.cursor/rules/knowledge-mcp.mdc` or `/home/YOUR_USER/.cursor/rules/knowledge-mcp.mdc`. `CURSOR_HOME` overrides the output directory for this installer; it does not configure Cursor itself. Cursor MCP registration in Bash requires Python 3. The `NoCursorMcp` option skips MCP registration only; it still refreshes the bootstrap file for a detected Cursor installation.
+The full bootstrap is saved as an account [User Rule](https://cursor.com/help/customization/rules), so it does not depend on reading a machine-specific file path. Restart Cursor after installation to refresh its cached rules. Later runs update the same managed block without duplicating the rule or replacing personal instructions. A conflicting unmanaged title, duplicate managed rules, missing sign-in, or failed API operation stops the installer with an explicit error.
 
-When no explicit target is supplied, the installer detects Codex and Cursor independently and updates each present harness. Detection looks for the CLI (`codex`, `agent`, `cursor-agent`, or `cursor`) or the harness home directory (`CODEX_HOME` / `~/.codex`, `CURSOR_HOME` / `~/.cursor`). If neither harness is found, pass `-Target` / `--target` explicitly.
+This integration uses Cursor's **internal account rule API**, verified with Cursor desktop 3.20.17. It is not a supported public API and may need maintenance when Cursor changes it. The installer verifies the saved content by reading it back; an unverified operation never triggers cleanup. If it reports an uncertain save, rerun it to inspect the existing rule before attempting another write. It does not automatically retry writes or sign you in.
+
+On migration, the installer backs up the old managed `~/.cursor/rules/knowledge-mcp.mdc` under `~/.knowledge-sync/cursor-rule-backups` before removing its generated block. A generated-only file is retired; any personal content remains in the active local file. Account rules are also backed up before updates. Unmanaged files and other account rules are preserved. If you previously added a manual rule pointing to that local file, remove that pointer in Cursor Settings after the new account rule is verified.
+
+`CURSOR_HOME` overrides the local MCP and legacy-file location only; it does not configure Cursor itself. `CURSOR_USER_DATA_DIR` selects Cursor's data directory when you run it with a custom `--user-data-dir`. Defaults are `%APPDATA%/Cursor` on Windows, `~/Library/Application Support/Cursor` on macOS, and `${XDG_CONFIG_HOME:-~/.config}/Cursor` on Linux. CLI-only installations without a desktop sign-in must skip account rule setup explicitly.
+
+`-NoCursorRule` / `--no-cursor-rule` skips the account rule and its migration. `-NoCursorMcp` / `--no-cursor-mcp` skips only MCP registration. An explicit `-Target` / `--target` writes the bootstrap to that file and skips account rule changes; MCP registration remains controlled by its separate flags. Cursor MCP registration in Bash also requires Python 3.
+
+When no explicit target is supplied, the installer detects Codex and Cursor independently and updates each present harness. Detection looks for the CLI (`codex`, `agent`, `cursor-agent`, or `cursor`), the harness home directory (`CODEX_HOME` / `~/.codex`, `CURSOR_HOME` / `~/.cursor`), or Cursor's desktop data directory. If neither harness is found, pass `-Target` / `--target` explicitly.
 
 ## Testing without a server
 
@@ -90,3 +96,5 @@ Both installers accept a local bootstrap file and custom target:
 ```bash
 ./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
 ```
+
+Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Test credentials and transport are isolated from the real Cursor account. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.
