@@ -3,13 +3,30 @@ set -euo pipefail
 
 domain="knowledge.test"
 token="${KNOWLEDGE_MCP_TOKEN:-}"
-target="${CODEX_HOME:-${HOME}/.codex}/AGENTS.md"
+target=""
 bootstrap_file=""
 dry_run=0
 install_alias=1
 install_codex_mcp=1
+install_cursor_mcp=1
 start_marker='<!-- KNOWLEDGE-MCP:BEGIN -->'
 end_marker='<!-- KNOWLEDGE-MCP:END -->'
+cursor_frontmatter=$'---\ndescription: Knowledge MCP bootstrap\nalwaysApply: true\n---\n'
+
+codex_home() { printf '%s' "${CODEX_HOME:-${HOME}/.codex}"; }
+cursor_home() { printf '%s' "${CURSOR_HOME:-${HOME}/.cursor}"; }
+cursor_rule_path() { printf '%s/rules/knowledge-mcp.mdc' "$(cursor_home)"; }
+
+codex_detected() {
+  command -v codex >/dev/null 2>&1 || [[ -d "$(codex_home)" ]]
+}
+
+cursor_detected() {
+  command -v agent >/dev/null 2>&1 \
+    || command -v cursor-agent >/dev/null 2>&1 \
+    || command -v cursor >/dev/null 2>&1 \
+    || [[ -d "$(cursor_home)" ]]
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,17 +37,13 @@ while [[ $# -gt 0 ]]; do
     --dry-run) dry_run=1; shift ;;
     --no-alias) install_alias=0; shift ;;
     --no-codex-mcp) install_codex_mcp=0; shift ;;
+    --no-cursor-mcp) install_cursor_mcp=0; shift ;;
     -h|--help)
-      printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH]'
+      printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH] [--bootstrap-file FILE] [--dry-run] [--no-alias] [--no-codex-mcp] [--no-cursor-mcp]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-
-if [[ "$target" == "${CODEX_HOME:-${HOME}/.codex}/AGENTS.md" ]] && ! command -v codex >/dev/null 2>&1 && [[ ! -d "${CODEX_HOME:-${HOME}/.codex}" ]]; then
-  echo 'Codex was not detected. Install Codex, set CODEX_HOME, or pass --target explicitly.' >&2
-  exit 1
-fi
 
 install_codex_mcp_server() {
   local mcp_url="$1" existing_json existing_url existing_type
@@ -57,6 +70,130 @@ install_codex_mcp_server() {
 
   codex mcp add knowledge --url "$mcp_url"
   echo 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
+}
+
+ensure_cursor_frontmatter() {
+  local file="$1" first wrapped
+  first="$(head -n 1 "$file" | tr -d '\r')"
+  [[ "$first" == '---' ]] && return
+  wrapped="$(mktemp)"
+  {
+    printf '%s\n' "$cursor_frontmatter"
+    cat "$file"
+  } > "$wrapped"
+  mv -f "$wrapped" "$file"
+}
+
+install_cursor_mcp_server() {
+  local mcp_url="$1" config python_bin candidate
+  if ! cursor_detected; then
+    return
+  fi
+  config="$(cursor_home)/mcp.json"
+
+  if [[ "$dry_run" == 1 ]]; then
+    echo "Would register Knowledge MCP in Cursor at [$mcp_url]."
+    return
+  fi
+
+  python_bin=""
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import json, os, pathlib, sys' >/dev/null 2>&1; then
+      python_bin="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$python_bin" ]]; then
+    echo 'Warning: python3 was not found; skipped Cursor Knowledge MCP registration.' >&2
+    return
+  fi
+
+  KNOWLEDGE_SYNC_MCP_URL="$mcp_url" "$python_bin" - "$config" <<'PY'
+import json, os, pathlib, sys, tempfile
+path = pathlib.Path(sys.argv[1])
+url = os.environ["KNOWLEDGE_SYNC_MCP_URL"]
+if path.exists() and path.stat().st_size:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"Cursor MCP config at [{path}] is not valid JSON.") from error
+else:
+    data = {}
+if not isinstance(data, dict):
+    raise SystemExit(f"Cursor MCP config at [{path}] is not a JSON object.")
+servers = data.setdefault("mcpServers", {})
+if servers is None:
+    servers = {}
+    data["mcpServers"] = servers
+if not isinstance(servers, dict):
+    raise SystemExit(f"Cursor MCP mcpServers in [{path}] is not a JSON object.")
+existing = servers.get("knowledge")
+if existing is not None:
+    existing_url = existing.get("url", "") if isinstance(existing, dict) else ""
+    if not isinstance(existing, dict) or not isinstance(existing_url, str) or existing.get("command") or existing_url.rstrip("/") != url.rstrip("/"):
+        raise SystemExit(
+            f"Cursor already has an MCP server named [knowledge] configured for [{existing_url}]. Refusing to replace it with [{url}]."
+        )
+    print(f"Knowledge MCP is already registered in Cursor at [{existing_url}].")
+    raise SystemExit(0)
+servers["knowledge"] = {"url": url}
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".knowledge-mcp-", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        output.write(json.dumps(data, indent=2) + "\n")
+    if path.exists():
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+print("Knowledge MCP registered in Cursor. Authenticate it in Cursor or run: agent mcp login knowledge")
+PY
+}
+
+write_agents_file() {
+  local target="$1"
+  local directory existing_file output_file block_file start_count end_count unchanged
+  directory="$(dirname "$target")"
+  mkdir -p "$directory"
+  existing_file="$(mktemp)"
+  [[ ! -f "$target" ]] || cp "$target" "$existing_file"
+  output_file="$(mktemp "$directory/.knowledge-agents-XXXXXX")"
+  block_file="$(mktemp)"
+  printf '%s\n%s\n\n%s\n%s\n' "$start_marker" '<!-- Generated from Knowledge MCP. Changes inside this block will be replaced. -->' "$bootstrap" "$end_marker" > "$block_file"
+
+  start_count="$(grep -Fxc "$start_marker" "$existing_file" || true)"
+  end_count="$(grep -Fxc "$end_marker" "$existing_file" || true)"
+  [[ "$start_count" == "$end_count" && "$start_count" -le 1 ]] || { echo 'Target contains an invalid managed block.' >&2; exit 1; }
+
+  if [[ "$start_count" == 0 ]]; then
+    if [[ -s "$existing_file" ]]; then sed -e '${/^$/d;}' "$existing_file" > "$output_file"; printf '\n\n' >> "$output_file"; fi
+    cat "$block_file" >> "$output_file"
+  else
+    awk -v start="$start_marker" -v end="$end_marker" -v block="$block_file" '
+      $0 == start { while ((getline line < block) > 0) print line; skip=1; next }
+      $0 == end { skip=0; next }
+      !skip { print }
+    ' "$existing_file" > "$output_file"
+  fi
+
+  rm -f "$existing_file" "$block_file"
+  if [[ "$target" == "$(cursor_rule_path)" ]]; then
+    ensure_cursor_frontmatter "$output_file"
+    echo "Cursor: add a User Rule in Settings > Rules to read [$target] at the start of each conversation. Home-directory rule files are not a documented automatic rule source." >&2
+  fi
+  unchanged=0
+  if [[ -f "$target" ]] && cmp -s "$target" "$output_file"; then unchanged=1; fi
+  if [[ "$dry_run" == 1 ]]; then
+    if [[ "${#targets[@]}" -gt 1 ]]; then printf -- '--- %s ---\n' "$target"; fi
+    cat "$output_file"
+    rm -f "$output_file"
+    return
+  fi
+  if [[ "$unchanged" == 1 ]]; then rm -f "$output_file"; echo "Knowledge bootstrap is already current in [$target]."
+  else mv -f "$output_file" "$target"; echo "Knowledge bootstrap installed in [$target]."
+  fi
 }
 
 resolve_base_url() {
@@ -247,38 +384,23 @@ fi
 [[ -n "${bootstrap//[[:space:]]/}" ]] || { echo 'Refusing to install an empty bootstrap.' >&2; exit 1; }
 [[ "$bootstrap" != *"$start_marker"* && "$bootstrap" != *"$end_marker"* ]] || { echo 'Bootstrap contains reserved markers.' >&2; exit 1; }
 
-directory="$(dirname "$target")"
-mkdir -p "$directory"
-existing_file="$(mktemp)"
-[[ ! -f "$target" ]] || cp "$target" "$existing_file"
-output_file="$(mktemp "$directory/.knowledge-agents-XXXXXX")"
-block_file="$(mktemp)"
-printf '%s\n%s\n\n%s\n%s\n' "$start_marker" '<!-- Generated from Knowledge MCP. Changes inside this block will be replaced. -->' "$bootstrap" "$end_marker" > "$block_file"
-
-start_count="$(grep -Fxc "$start_marker" "$existing_file" || true)"
-end_count="$(grep -Fxc "$end_marker" "$existing_file" || true)"
-[[ "$start_count" == "$end_count" && "$start_count" -le 1 ]] || { echo 'Target contains an invalid managed block.' >&2; exit 1; }
-
-if [[ "$start_count" == 0 ]]; then
-  if [[ -s "$existing_file" ]]; then sed -e '${/^$/d;}' "$existing_file" > "$output_file"; printf '\n\n' >> "$output_file"; fi
-  cat "$block_file" >> "$output_file"
+targets=()
+if [[ -n "$target" ]]; then
+  targets+=("$target")
 else
-  awk -v start="$start_marker" -v end="$end_marker" -v block="$block_file" '
-    $0 == start { while ((getline line < block) > 0) print line; skip=1; next }
-    $0 == end { skip=0; next }
-    !skip { print }
-  ' "$existing_file" > "$output_file"
+  if codex_detected; then targets+=("$(codex_home)/AGENTS.md"); fi
+  if cursor_detected; then targets+=("$(cursor_rule_path)"); fi
+  if [[ "${#targets[@]}" -eq 0 ]]; then
+    echo 'Neither Codex nor Cursor was detected. Install one of them, set CODEX_HOME or CURSOR_HOME, or pass --target explicitly.' >&2
+    exit 1
+  fi
 fi
 
-rm -f "$existing_file" "$block_file"
-unchanged=0
-if [[ -f "$target" ]] && cmp -s "$target" "$output_file"; then unchanged=1; fi
-if [[ "$dry_run" == 1 ]]; then cat "$output_file"; rm -f "$output_file"; exit 0; fi
-if [[ "$unchanged" == 1 ]]; then rm -f "$output_file"; echo "Knowledge bootstrap is already current in [$target]."
-else mv -f "$output_file" "$target"; echo "Knowledge bootstrap installed in [$target]."
-fi
+for target in "${targets[@]}"; do
+  write_agents_file "$target"
+done
 
-if [[ "$install_alias" == 1 ]]; then
+if [[ "$dry_run" != 1 && "$install_alias" == 1 ]]; then
   shell_name="$(basename "${SHELL:-bash}")"
   case "$shell_name" in
     zsh) rc_file="$HOME/.zshrc" ;;
@@ -311,4 +433,8 @@ fi
 
 if [[ "$install_codex_mcp" == 1 ]]; then
   install_codex_mcp_server "$(resolve_base_url "$domain")/mcp/knowledge"
+fi
+
+if [[ "$install_cursor_mcp" == 1 ]]; then
+  install_cursor_mcp_server "$(resolve_base_url "$domain")/mcp/knowledge"
 fi

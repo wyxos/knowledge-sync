@@ -5,7 +5,8 @@ param(
     [string] $Target,
     [string] $BootstrapFile,
     [switch] $NoAlias,
-    [switch] $NoCodexMcp
+    [switch] $NoCodexMcp,
+    [switch] $NoCursorMcp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,62 @@ function Resolve-KnowledgeBaseUrl([string] $Value) {
     $Value = $Value.Trim().TrimEnd('/')
     if ($Value -match '^https?://') { return $Value }
     return "https://$Value"
+}
+
+function Get-CodexHome {
+    if ($env:CODEX_HOME) { return $env:CODEX_HOME }
+    return Join-Path $HOME '.codex'
+}
+
+function Get-CursorHome {
+    if ($env:CURSOR_HOME) { return $env:CURSOR_HOME }
+    return Join-Path $HOME '.cursor'
+}
+
+function Get-CursorRulePath {
+    return Join-Path (Join-Path (Get-CursorHome) 'rules') 'knowledge-mcp.mdc'
+}
+
+function Test-CodexHarness {
+    return [bool]((Get-Command codex -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Get-CodexHome)))
+}
+
+function Test-CursorHarness {
+    if (Get-Command agent -ErrorAction SilentlyContinue) { return $true }
+    if (Get-Command cursor-agent -ErrorAction SilentlyContinue) { return $true }
+    if (Get-Command cursor -ErrorAction SilentlyContinue) { return $true }
+    return [bool](Test-Path -LiteralPath (Get-CursorHome))
+}
+
+function Get-KnowledgeTargets {
+    if ($Target) { return @($Target) }
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    if (Test-CodexHarness) { $paths.Add((Join-Path (Get-CodexHome) 'AGENTS.md')) }
+    if (Test-CursorHarness) { $paths.Add((Get-CursorRulePath)) }
+    if ($paths.Count -eq 0) {
+        throw 'Neither Codex nor Cursor was detected. Install one of them, set CODEX_HOME or CURSOR_HOME, or pass -Target explicitly.'
+    }
+    return @($paths)
+}
+
+function Add-CursorRuleFrontmatter([string] $Content) {
+    $first = ($Content -split '\r?\n', 2)[0]
+    if ($first -eq '---') { return $Content }
+    return "---`ndescription: Knowledge MCP bootstrap`nalwaysApply: true`n---`n`n$($Content.TrimStart())"
+}
+
+function Save-TextFile([string] $Path, [string] $Content) {
+    $Path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $temporary = Join-Path $directory ('.knowledge-agents-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.File]::WriteAllText($temporary, $Content, [Text.UTF8Encoding]::new($false))
+        Move-Item -Force -LiteralPath $temporary -Destination $Path
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -Force -LiteralPath $temporary }
+    }
 }
 
 function Install-CodexMcp([string] $McpUrl) {
@@ -44,6 +101,67 @@ function Install-CodexMcp([string] $McpUrl) {
     & $codex.Source mcp add knowledge --url $McpUrl
     if ($LASTEXITCODE -ne 0) { throw 'Codex could not register the Knowledge MCP server.' }
     Write-Host 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
+}
+
+function Install-CursorMcp([string] $McpUrl) {
+    if (-not (Test-CursorHarness)) { return }
+
+    $configPath = Join-Path (Get-CursorHome) 'mcp.json'
+    $config = $null
+    if (Test-Path -LiteralPath $configPath) {
+        $raw = Get-Content -Raw -LiteralPath $configPath
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            if (-not $raw.TrimStart().StartsWith('{')) {
+                throw "Cursor MCP config at [$configPath] is not a JSON object."
+            }
+            try { $config = $raw | ConvertFrom-Json }
+            catch { throw "Cursor MCP config at [$configPath] is not valid JSON." }
+        }
+    }
+    if ($null -eq $config) { $config = [pscustomobject]@{ mcpServers = [pscustomobject]@{} } }
+    if ($config -isnot [pscustomobject]) {
+        throw "Cursor MCP config at [$configPath] is not a JSON object."
+    }
+    if (-not $config.PSObject.Properties['mcpServers'] -or $null -eq $config.mcpServers) {
+        $config | Add-Member -Force -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{})
+    }
+
+    $servers = $config.mcpServers
+    if ($servers -isnot [pscustomobject]) {
+        throw "Cursor MCP mcpServers in [$configPath] is not a JSON object."
+    }
+    $existing = $null
+    if ($servers -is [System.Collections.IDictionary]) {
+        if ($servers.Contains('knowledge')) { $existing = $servers['knowledge'] }
+    } elseif ($servers.PSObject.Properties['knowledge']) {
+        $existing = $servers.knowledge
+    }
+
+    if ($null -ne $existing) {
+        $existingUrl = [string] $existing.url
+        if ($existing -isnot [pscustomobject] -or $existing.command -or $existingUrl.TrimEnd('/') -cne $McpUrl.TrimEnd('/')) {
+            throw "Cursor already has an MCP server named [knowledge] configured for [$existingUrl]. Refusing to replace it with [$McpUrl]."
+        }
+        Write-Host "Knowledge MCP is already registered in Cursor at [$existingUrl]."
+        return
+    }
+
+    if ($WhatIfPreference) {
+        Write-Host "What if: Register Knowledge MCP in Cursor at [$McpUrl]."
+        return
+    }
+
+    $entry = [pscustomobject]@{ url = $McpUrl }
+    if ($servers -is [System.Collections.IDictionary]) {
+        $servers['knowledge'] = $entry
+    } else {
+        $servers | Add-Member -NotePropertyName knowledge -NotePropertyValue $entry
+    }
+
+    if ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($configPath, 'Register Knowledge MCP in Cursor')) {
+        Save-TextFile $configPath (($config | ConvertTo-Json -Depth 100 -WarningAction Stop) + "`n")
+        Write-Host 'Knowledge MCP registered in Cursor. Authenticate it in Cursor or run: agent mcp login knowledge'
+    }
 }
 
 function ConvertTo-Base64Url([byte[]] $Bytes) {
@@ -286,14 +404,6 @@ $aliasEnd
     }
 }
 
-if (-not $Target) {
-    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
-    if (-not (Get-Command codex -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $codexHome)) {
-        throw 'Codex was not detected. Install Codex, set CODEX_HOME, or pass -Target explicitly.'
-    }
-    $Target = Join-Path $codexHome 'AGENTS.md'
-}
-
 if ($BootstrapFile) {
     $bootstrap = Get-Content -Raw -LiteralPath $BootstrapFile
 } else {
@@ -304,22 +414,21 @@ if ($BootstrapFile) {
     $bootstrap = Get-KnowledgeBootstrap "$baseUrl/mcp/knowledge" $Token
 }
 
-$existing = if (Test-Path -LiteralPath $Target) { Get-Content -Raw -LiteralPath $Target } else { '' }
-$updated = Merge-ManagedBlock $existing $bootstrap
-if ($updated -ceq $existing) {
-    Write-Host "Knowledge bootstrap is already current in [$Target]."
-} elseif ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($Target, 'Install Knowledge MCP bootstrap')) {
-    $directory = Split-Path -Parent $Target
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $temporary = Join-Path $directory ('.knowledge-agents-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        [IO.File]::WriteAllText($temporary, $updated, [Text.UTF8Encoding]::new($false))
-        Move-Item -Force -LiteralPath $temporary -Destination $Target
-    } finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -Force -LiteralPath $temporary }
+foreach ($path in @(Get-KnowledgeTargets)) {
+    $existing = if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path } else { '' }
+    $updated = Merge-ManagedBlock $existing $bootstrap
+    if ($path -eq (Get-CursorRulePath)) {
+        $updated = Add-CursorRuleFrontmatter $updated
+        Write-Host "Cursor: add a User Rule in Settings > Rules to read [$path] at the start of each conversation. Home-directory rule files are not a documented automatic rule source."
     }
-    Write-Host "Knowledge bootstrap installed in [$Target]."
+    if ($updated -ceq $existing) {
+        Write-Host "Knowledge bootstrap is already current in [$path]."
+    } elseif ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($path, 'Install Knowledge MCP bootstrap')) {
+        Save-TextFile $path $updated
+        Write-Host "Knowledge bootstrap installed in [$path]."
+    }
 }
 
 if (-not $NoAlias) { Install-KnowledgeAlias $Domain }
 if (-not $NoCodexMcp) { Install-CodexMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
+if (-not $NoCursorMcp) { Install-CursorMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
