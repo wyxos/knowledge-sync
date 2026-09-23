@@ -163,16 +163,17 @@ class InstallerTests(unittest.TestCase):
             shutil.copyfile(ROOT / "tests/fixtures/cursor_sitecustomize.py", root / "sitecustomize.py")
             env = dict(os.environ, PYTHONPATH=str(root), CURSOR_TEST_ACCOUNT=str(fixture),
                        CURSOR_USER_DATA_DIR=str(root / "data"), CURSOR_HOME=str(cursor),
-                       CODEX_HOME=str(codex), HOME=str(root), USERPROFILE=str(root))
+                       CODEX_HOME=str(codex), CLAUDE_CONFIG_DIR=str(root / "claude"),
+                       HOME=str(root), USERPROFILE=str(root))
             bootstrap = root / "bootstrap.md"
             bootstrap.write_text("# Café — 知识", encoding="utf-8")
             if sys.platform == "win32":
                 command = ["pwsh", "-NoProfile", "-File", str(ROOT / "install.ps1"),
-                           "-BootstrapFile", str(bootstrap), "-NoAlias", "-NoCodexMcp"]
+                           "-BootstrapFile", str(bootstrap), "-NoAlias", "-NoCodexMcp", "-NoClaudeMcp"]
                 preview = "-WhatIf"
             else:
                 command = ["bash", str(ROOT / "install.sh"), "--bootstrap-file", str(bootstrap),
-                           "--no-alias", "--no-codex-mcp"]
+                           "--no-alias", "--no-codex-mcp", "--no-claude-mcp"]
                 preview = "--dry-run"
 
             def run(extra=()):

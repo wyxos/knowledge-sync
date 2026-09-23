@@ -6,6 +6,7 @@ param(
     [string] $BootstrapFile,
     [switch] $NoAlias,
     [switch] $NoCodexMcp,
+    [switch] $NoClaudeMcp,
     [switch] $NoCursorMcp,
     [switch] $NoCursorRule
 )
@@ -30,8 +31,24 @@ function Get-CursorHome {
     return Join-Path $HOME '.cursor'
 }
 
+function Get-ClaudeHome {
+    if ($env:CLAUDE_CONFIG_DIR) { return $env:CLAUDE_CONFIG_DIR }
+    return Join-Path $HOME '.claude'
+}
+
+function Get-ClaudeConfigPath {
+    if ($env:CLAUDE_CONFIG_DIR) { return Join-Path $env:CLAUDE_CONFIG_DIR '.claude.json' }
+    return Join-Path $HOME '.claude.json'
+}
+
 function Test-CodexHarness {
     return [bool]((Get-Command codex -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Get-CodexHome)))
+}
+
+function Test-ClaudeHarness {
+    return [bool]((Get-Command claude -ErrorAction SilentlyContinue) -or
+        (Test-Path -LiteralPath (Get-ClaudeHome)) -or
+        (Test-Path -LiteralPath (Get-ClaudeConfigPath)))
 }
 
 function Test-CursorHarness {
@@ -51,8 +68,9 @@ function Get-KnowledgeTargets {
 
     $paths = [System.Collections.Generic.List[string]]::new()
     if (Test-CodexHarness) { $paths.Add((Join-Path (Get-CodexHome) 'AGENTS.md')) }
+    if (Test-ClaudeHarness) { $paths.Add((Join-Path (Get-ClaudeHome) 'CLAUDE.md')) }
     if ($paths.Count -eq 0 -and -not (Test-CursorHarness)) {
-        throw 'Neither Codex nor Cursor was detected. Install one of them, set CODEX_HOME or CURSOR_HOME, or pass -Target explicitly.'
+        throw 'No Codex, Claude, or Cursor installation was detected. Install one, set its configuration directory, or pass -Target explicitly.'
     }
     return @($paths)
 }
@@ -337,6 +355,50 @@ function Install-CodexMcp([string] $McpUrl) {
     & $codex.Source mcp add knowledge --url $McpUrl
     if ($LASTEXITCODE -ne 0) { throw 'Codex could not register the Knowledge MCP server.' }
     Write-Host 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
+}
+
+function Install-ClaudeMcp([string] $McpUrl) {
+    if (-not (Test-ClaudeHarness)) { return }
+
+    $configPath = Get-ClaudeConfigPath
+    $config = $null
+    if (Test-Path -LiteralPath $configPath) {
+        $raw = Get-Content -Raw -LiteralPath $configPath
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            if (-not $raw.TrimStart().StartsWith('{')) { throw "Claude config at [$configPath] is not a JSON object." }
+            try { $config = $raw | ConvertFrom-Json }
+            catch { throw "Claude config at [$configPath] is not valid JSON." }
+        }
+    }
+    if ($null -eq $config) { $config = [pscustomobject]@{} }
+    if ($config -isnot [pscustomobject]) { throw "Claude config at [$configPath] is not a JSON object." }
+    if (-not $config.PSObject.Properties['mcpServers'] -or $null -eq $config.mcpServers) {
+        $config | Add-Member -Force -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{})
+    }
+    $servers = $config.mcpServers
+    if ($servers -isnot [pscustomobject]) { throw "Claude mcpServers in [$configPath] is not a JSON object." }
+
+    if ($servers.PSObject.Properties['knowledge']) {
+        $existing = $servers.knowledge
+        $existingUrl = if ($existing -is [pscustomobject]) { [string] $existing.url } else { '' }
+        if ($existing -isnot [pscustomobject] -or
+            $existing.type -cnotin @('http', 'streamable-http') -or
+            $existing.command -or $existingUrl.TrimEnd('/') -cne $McpUrl.TrimEnd('/')) {
+            throw "Claude already has an MCP server named [knowledge] configured for [$existingUrl]. Refusing to replace it with [$McpUrl]."
+        }
+        Write-Host "Knowledge MCP is already registered in Claude at [$existingUrl]."
+        return
+    }
+
+    if ($WhatIfPreference) {
+        Write-Host "What if: Register Knowledge MCP in Claude at [$McpUrl]."
+        return
+    }
+    $servers | Add-Member -NotePropertyName knowledge -NotePropertyValue ([pscustomobject]@{ type = 'http'; url = $McpUrl })
+    if ($null -eq $PSCmdlet -or $PSCmdlet.ShouldProcess($configPath, 'Register Knowledge MCP in Claude')) {
+        Save-TextFile $configPath (($config | ConvertTo-Json -Depth 100 -WarningAction Stop) + "`n")
+        Write-Host 'Knowledge MCP registered in Claude. Run: claude mcp login knowledge'
+    }
 }
 
 function Install-CursorMcp([string] $McpUrl) {
@@ -663,5 +725,6 @@ foreach ($path in @(Get-KnowledgeTargets)) {
 
 if (-not $NoAlias) { Install-KnowledgeAlias $Domain }
 if (-not $NoCodexMcp) { Install-CodexMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
+if (-not $NoClaudeMcp) { Install-ClaudeMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
 if (-not $NoCursorMcp) { Install-CursorMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
 if (-not $Target -and -not $NoCursorRule) { Install-CursorUserRule $bootstrap }

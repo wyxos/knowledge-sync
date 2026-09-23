@@ -1,6 +1,6 @@
 # Knowledge Sync
 
-Synchronize the private root bootstrap from a Knowledge MCP server for detected Codex and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). Cursor receives a dedicated **Knowledge MCP bootstrap** User Rule in its signed-in account, applying across projects and syncing across devices. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
+Synchronize the private root bootstrap from a Knowledge MCP server for detected Codex, Claude Code, and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). Claude Code receives global `CLAUDE.md` under `CLAUDE_CONFIG_DIR` (default `~/.claude`). Cursor receives a dedicated **Knowledge MCP bootstrap** User Rule in its signed-in account, applying across projects and syncing across devices. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
 
 The Knowledge content and access token are never stored in this public repository.
 
@@ -67,6 +67,8 @@ The first successful run also installs a persistent `knowledge-sync` command in 
 
 When the Codex CLI is available, the installer also checks for a global MCP server named `knowledge`. It registers the server at `<domain>/mcp/knowledge` when missing, leaves an identical registration unchanged, and refuses to overwrite a same-named server with a different URL. Codex starts its OAuth flow during registration when the server requires authentication. Pass `-NoCodexMcp` or `--no-codex-mcp` to skip MCP registration.
 
+When Claude Code is detected, the installer updates its global `CLAUDE.md` and registers a user-scope HTTP MCP server named `knowledge` in `~/.claude.json`. It preserves other settings and matching registrations, and refuses a conflicting server. Authenticate the server through Claude Code's `/mcp` panel or run `claude mcp login knowledge` when the CLI is available. Restart Claude Code to reload the global instructions. Pass `-NoClaudeMcp` or `--no-claude-mcp` to skip its MCP registration. On macOS and Linux, registration requires Python 3.
+
 When Cursor is detected (`agent`, `cursor-agent`, `cursor`, or the Cursor home directory), the installer registers the same Knowledge MCP URL in `~/.cursor/mcp.json`. An identical registration is left unchanged; a same-named server with a different URL is refused. Authenticate afterward in Cursor, or run `agent mcp login knowledge`. Pass `-NoCursorMcp` or `--no-cursor-mcp` to skip Cursor MCP registration.
 
 ### Cursor User Rule setup
@@ -83,18 +85,18 @@ On migration, the installer backs up the old managed `~/.cursor/rules/knowledge-
 
 `-NoCursorRule` / `--no-cursor-rule` skips the account rule and its migration. `-NoCursorMcp` / `--no-cursor-mcp` skips only MCP registration. An explicit `-Target` / `--target` writes the bootstrap to that file and skips account rule changes; MCP registration remains controlled by its separate flags. Cursor MCP registration in Bash also requires Python 3.
 
-When no explicit target is supplied, the installer detects Codex and Cursor independently and updates each present harness. Detection looks for the CLI (`codex`, `agent`, `cursor-agent`, or `cursor`), the harness home directory (`CODEX_HOME` / `~/.codex`, `CURSOR_HOME` / `~/.cursor`), or Cursor's desktop data directory. If neither harness is found, pass `-Target` / `--target` explicitly.
+When no explicit target is supplied, the installer detects Codex, Claude Code, and Cursor independently and updates each present harness. Claude detection looks for the `claude` CLI, `CLAUDE_CONFIG_DIR` / `~/.claude`, or its global `~/.claude.json` file. Codex detection looks for its CLI or home directory; Cursor detection also checks its desktop data directory. If none is found, pass `-Target` / `--target` explicitly.
 
 ## Testing without a server
 
 Both installers accept a local bootstrap file and custom target:
 
 ```powershell
-./install.ps1 -BootstrapFile ./bootstrap.md -Target ./tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
+./install.ps1 -BootstrapFile ./bootstrap.md -Target ./tmp/AGENTS.md -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorMcp
 ```
 
 ```bash
-./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
+./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp
 ```
 
-Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Test credentials and transport are isolated from the real Cursor account. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.
+Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Run `tests/claude.ps1` on Windows or `bash tests/claude.sh` on macOS/Linux for Claude configuration checks. Test credentials and transport are isolated from the real accounts. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.

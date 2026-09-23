@@ -8,16 +8,26 @@ bootstrap_file=""
 dry_run=0
 install_alias=1
 install_codex_mcp=1
+install_claude_mcp=1
 install_cursor_mcp=1
 install_cursor_rule=1
 start_marker='<!-- KNOWLEDGE-MCP:BEGIN -->'
 end_marker='<!-- KNOWLEDGE-MCP:END -->'
 
 codex_home() { printf '%s' "${CODEX_HOME:-${HOME}/.codex}"; }
+claude_home() { printf '%s' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"; }
+claude_config() {
+  if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then printf '%s/.claude.json' "$CLAUDE_CONFIG_DIR"
+  else printf '%s/.claude.json' "$HOME"; fi
+}
 cursor_home() { printf '%s' "${CURSOR_HOME:-${HOME}/.cursor}"; }
 
 codex_detected() {
   command -v codex >/dev/null 2>&1 || [[ -d "$(codex_home)" ]]
+}
+
+claude_detected() {
+  command -v claude >/dev/null 2>&1 || [[ -d "$(claude_home)" ]] || [[ -f "$(claude_config)" ]]
 }
 
 cursor_detected() {
@@ -42,10 +52,11 @@ while [[ $# -gt 0 ]]; do
     --dry-run) dry_run=1; shift ;;
     --no-alias) install_alias=0; shift ;;
     --no-codex-mcp) install_codex_mcp=0; shift ;;
+    --no-claude-mcp) install_claude_mcp=0; shift ;;
     --no-cursor-mcp) install_cursor_mcp=0; shift ;;
     --no-cursor-rule) install_cursor_rule=0; shift ;;
     -h|--help)
-      printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH] [--bootstrap-file FILE] [--dry-run] [--no-alias] [--no-codex-mcp] [--no-cursor-mcp] [--no-cursor-rule]'
+      printf '%s\n' 'Usage: install.sh [--domain knowledge.test] [--token TOKEN] [--target PATH] [--bootstrap-file FILE] [--dry-run] [--no-alias] [--no-codex-mcp] [--no-claude-mcp] [--no-cursor-mcp] [--no-cursor-rule]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -76,6 +87,71 @@ install_codex_mcp_server() {
 
   codex mcp add knowledge --url "$mcp_url"
   echo 'Knowledge MCP registered in Codex. Codex completes OAuth authentication during registration when the server requires it.'
+}
+
+install_claude_mcp_server() {
+  local mcp_url="$1" config python_bin candidate
+  claude_detected || return 0
+  config="$(claude_config)"
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import json, pathlib, tempfile' >/dev/null 2>&1; then
+      python_bin="$candidate"
+      break
+    fi
+  done
+  if [[ -z "${python_bin:-}" ]]; then
+    echo 'Python 3 is required to register Claude Knowledge MCP. Install Python, or use --no-claude-mcp to skip it explicitly.' >&2
+    return 1
+  fi
+
+  KNOWLEDGE_SYNC_MCP_URL="$mcp_url" KNOWLEDGE_SYNC_DRY_RUN="$dry_run" "$python_bin" - "$config" <<'PY'
+import json, os, pathlib, sys, tempfile
+path = pathlib.Path(sys.argv[1])
+url = os.environ["KNOWLEDGE_SYNC_MCP_URL"]
+if path.exists() and path.stat().st_size:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError as error:
+        raise SystemExit(f"Claude config at [{path}] is not valid JSON.") from error
+else:
+    data = {}
+if not isinstance(data, dict):
+    raise SystemExit(f"Claude config at [{path}] is not a JSON object.")
+servers = data.setdefault("mcpServers", {})
+if servers is None:
+    servers = {}
+    data["mcpServers"] = servers
+if not isinstance(servers, dict):
+    raise SystemExit(f"Claude mcpServers in [{path}] is not a JSON object.")
+if "knowledge" in servers:
+    existing = servers["knowledge"]
+    existing_url = existing.get("url", "") if isinstance(existing, dict) else ""
+    if (not isinstance(existing, dict) or existing.get("type") not in ("http", "streamable-http")
+            or existing.get("command") or not isinstance(existing_url, str)
+            or existing_url.rstrip("/") != url.rstrip("/")):
+        raise SystemExit(f"Claude already has an MCP server named [knowledge] configured for [{existing_url}]. Refusing to replace it with [{url}].")
+    print(f"Knowledge MCP is already registered in Claude at [{existing_url}].")
+    raise SystemExit(0)
+if os.environ["KNOWLEDGE_SYNC_DRY_RUN"] == "1":
+    print(f"Would register Knowledge MCP in Claude at [{url}].")
+    raise SystemExit(0)
+servers["knowledge"] = {"type": "http", "url": url}
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".knowledge-mcp-", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        json.dump(data, output, ensure_ascii=False, indent=2)
+        output.write("\n")
+    if path.exists():
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+    else:
+        os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+print("Knowledge MCP registered in Claude. Run: claude mcp login knowledge")
+PY
 }
 
 install_cursor_user_rule() {
@@ -616,8 +692,9 @@ if [[ -n "$target" ]]; then
   targets+=("$target")
 else
   if codex_detected; then targets+=("$(codex_home)/AGENTS.md"); fi
+  if claude_detected; then targets+=("$(claude_home)/CLAUDE.md"); fi
   if [[ "${#targets[@]}" -eq 0 ]] && ! cursor_detected; then
-    echo 'Neither Codex nor Cursor was detected. Install one of them, set CODEX_HOME or CURSOR_HOME, or pass --target explicitly.' >&2
+    echo 'No Codex, Claude, or Cursor installation was detected. Install one, set its configuration directory, or pass --target explicitly.' >&2
     exit 1
   fi
 fi
@@ -660,6 +737,10 @@ fi
 
 if [[ "$install_codex_mcp" == 1 ]]; then
   install_codex_mcp_server "$(resolve_base_url "$domain")/mcp/knowledge"
+fi
+
+if [[ "$install_claude_mcp" == 1 ]]; then
+  install_claude_mcp_server "$(resolve_base_url "$domain")/mcp/knowledge"
 fi
 
 if [[ "$install_cursor_mcp" == 1 ]]; then

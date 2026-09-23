@@ -23,13 +23,13 @@ jobs:
           New-Item -ItemType Directory -Force .tmp | Out-Null
           Set-Content .tmp/bootstrap.md "# Bootstrap`n`nPrivate routing."
           Set-Content .tmp/AGENTS.md "# Personal`n`nKeep this."
-          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorMcp
           $first = Get-Content -Raw .tmp/AGENTS.md
-          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorMcp
           $second = Get-Content -Raw .tmp/AGENTS.md
           if ($first -cne $second -or $second -notmatch '# Personal' -or $second -notmatch '# Bootstrap') { exit 1 }
           $env:KNOWLEDGE_SYNC_PROFILE = "$PWD/.tmp/profile.ps1"
-          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoCodexMcp -NoCursorMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoCodexMcp -NoClaudeMcp -NoCursorMcp
           if ((Get-Content -Raw $env:KNOWLEDGE_SYNC_PROFILE) -notmatch 'function global:knowledge-sync') { exit 1 }
 
           # The documented `irm <url> | iex` form has no script command context,
@@ -39,21 +39,23 @@ jobs:
           $inline = $inline.Replace('[string] $BootstrapFile,', "[string] `$BootstrapFile = '$PWD/.tmp/bootstrap.md',")
           $inline = $inline.Replace('[switch] $NoAlias', '[switch] $NoAlias = $true')
           $inline = $inline.Replace('[switch] $NoCodexMcp', '[switch] $NoCodexMcp = $true')
+          $inline = $inline.Replace('[switch] $NoClaudeMcp', '[switch] $NoClaudeMcp = $true')
           $inline = $inline.Replace('[switch] $NoCursorMcp', '[switch] $NoCursorMcp = $true')
           $inline | Invoke-Expression
           if ((Get-Content -Raw .tmp/inline-AGENTS.md) -notmatch '# Bootstrap') { exit 1 }
 
           $env:CODEX_HOME = "$PWD/.tmp/codex-home"
           $env:CURSOR_HOME = "$PWD/.tmp/cursor-home"
+          $env:CLAUDE_CONFIG_DIR = "$PWD/.tmp/claude-not-installed"
           New-Item -ItemType Directory -Force .tmp/codex-home, .tmp/cursor-home | Out-Null
           Set-Content .tmp/codex-home/AGENTS.md "# Codex personal`n`nKeep this."
-          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp -NoClaudeMcp
           $codexAgents = Get-Content -Raw .tmp/codex-home/AGENTS.md
           $cursorMcp = Get-Content -Raw .tmp/cursor-home/mcp.json | ConvertFrom-Json
           if ($codexAgents -notmatch '# Codex personal' -or $codexAgents -notmatch '# Bootstrap') { exit 1 }
           if ($cursorMcp.mcpServers.knowledge.url -ne 'https://knowledge.test/mcp/knowledge') { exit 1 }
           Copy-Item .tmp/cursor-home/mcp.json .tmp/cursor-mcp-first.json
-          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp
+          ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -NoAlias -NoCodexMcp -NoClaudeMcp
           if ((Get-Content -Raw .tmp/cursor-home/mcp.json) -cne (Get-Content -Raw .tmp/cursor-mcp-first.json)) { exit 1 }
 
           $env:CURSOR_HOME = "$PWD/.tmp/cursor-conflict"
@@ -61,7 +63,7 @@ jobs:
           Set-Content .tmp/cursor-conflict/mcp.json '{"mcpServers":{"knowledge":{"url":"https://other.example/mcp"}}}'
           $ErrorActionPreference = 'Stop'
           try {
-            ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp
+            ./install.ps1 -NoCursorRule -BootstrapFile .tmp/bootstrap.md -Target .tmp/AGENTS.md -NoAlias -NoCodexMcp -NoClaudeMcp
             throw 'expected Cursor MCP URL conflict to fail'
           } catch {
             if ("$_" -notmatch 'Refusing to replace') { throw }
@@ -70,6 +72,9 @@ jobs:
       - name: Verify Cursor configuration safety
         shell: pwsh
         run: ./tests/cursor.ps1
+      - name: Verify Claude configuration safety
+        shell: pwsh
+        run: ./tests/claude.ps1
 
   bash:
     strategy:
@@ -90,32 +95,34 @@ jobs:
           mkdir -p .tmp
           printf '# Bootstrap\n\nPrivate routing.\n' > .tmp/bootstrap.md
           printf '# Personal\n\nKeep this.\n' > .tmp/AGENTS.md
-          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
+          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp
           cp .tmp/AGENTS.md .tmp/first.md
-          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-cursor-mcp
+          ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp
           cmp .tmp/first.md .tmp/AGENTS.md
           grep -q '# Personal' .tmp/AGENTS.md
           grep -q '# Bootstrap' .tmp/AGENTS.md
-          KNOWLEDGE_SYNC_RC="$PWD/.tmp/shellrc" ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-codex-mcp --no-cursor-mcp
+          KNOWLEDGE_SYNC_RC="$PWD/.tmp/shellrc" ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-codex-mcp --no-claude-mcp --no-cursor-mcp
           grep -q 'knowledge-sync()' .tmp/shellrc
 
           mkdir -p .tmp/codex-home .tmp/cursor-home
           printf '# Codex personal\n\nKeep this.\n' > .tmp/codex-home/AGENTS.md
-          CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" \
-            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
+          CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" CLAUDE_CONFIG_DIR="$PWD/.tmp/claude-not-installed" \
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp --no-claude-mcp
           grep -q '# Codex personal' .tmp/codex-home/AGENTS.md
           grep -q '# Bootstrap' .tmp/codex-home/AGENTS.md
           grep -q 'https://knowledge.test/mcp/knowledge' .tmp/cursor-home/mcp.json
           cp .tmp/cursor-home/mcp.json .tmp/cursor-mcp-first.json
-          CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" \
-            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp
+          CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-home" CLAUDE_CONFIG_DIR="$PWD/.tmp/claude-not-installed" \
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --no-alias --no-codex-mcp --no-claude-mcp
           cmp .tmp/cursor-mcp-first.json .tmp/cursor-home/mcp.json
 
           mkdir -p .tmp/cursor-conflict
           printf '%s\n' '{"mcpServers":{"knowledge":{"url":"https://other.example/mcp"}}}' > .tmp/cursor-conflict/mcp.json
-          if CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-conflict" \
-            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp; then
+          if CODEX_HOME="$PWD/.tmp/codex-home" CURSOR_HOME="$PWD/.tmp/cursor-conflict" CLAUDE_CONFIG_DIR="$PWD/.tmp/claude-not-installed" \
+            ./install.sh --no-cursor-rule --bootstrap-file .tmp/bootstrap.md --target .tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp; then
             exit 1
           fi
       - name: Verify Cursor configuration safety and preview
         run: bash tests/cursor.sh
+      - name: Verify Claude configuration safety and preview
+        run: bash tests/claude.sh
