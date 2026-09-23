@@ -126,3 +126,5 @@ jobs:
         run: bash tests/cursor.sh
       - name: Verify Claude configuration safety and preview
         run: bash tests/claude.sh
+      - name: Verify macOS Keychain failure handling
+        run: bash tests/keychain.sh

@@ -61,6 +61,8 @@ The default domain is `knowledge.test`. Domains without a scheme use HTTPS. Pass
 
 On first use, the installer opens the Knowledge OAuth authorization page in your browser. After approval, Windows protects the credentials with DPAPI, macOS uses Keychain, and Linux uses Secret Service when `secret-tool` is available. Linux falls back to a user-readable-only file with an explicit warning when no keyring CLI exists. Later runs reuse or refresh the OAuth session automatically.
 
+On macOS, run an OAuth sync from a local Terminal. A non-interactive SSH session may be unable to read or update the login Keychain; when an existing entry is inaccessible, the installer stops before opening another browser sign-in. For remote sync, fetch the current bootstrap in an authenticated session, pass it with `--bootstrap-file`, and verify the managed targets. Do not treat a working copy on the remote machine as current without checking it first.
+
 `KNOWLEDGE_MCP_TOKEN` and the explicit token options remain available for headless automation. The Bash installer requires `curl`, `jq`, `openssl`, and `python3` for interactive OAuth.
 
 The first successful run also installs a persistent `knowledge-sync` command in the current user's PowerShell profile, `.bashrc`, or `.zshrc`. Open a new shell and run `knowledge-sync` to refresh later. Pass `-NoAlias` or `--no-alias` to skip this setup.
@@ -99,4 +101,4 @@ Both installers accept a local bootstrap file and custom target:
 ./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp
 ```
 
-Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Run `tests/claude.ps1` on Windows or `bash tests/claude.sh` on macOS/Linux for Claude configuration checks. Test credentials and transport are isolated from the real accounts. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.
+Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Run `tests/claude.ps1` on Windows or `bash tests/claude.sh` on macOS/Linux for Claude configuration checks. Run `bash tests/keychain.sh` to check that an inaccessible macOS Keychain entry does not trigger a new OAuth prompt. Test credentials and transport are isolated from the real accounts. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.

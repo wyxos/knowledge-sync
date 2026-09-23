@@ -513,9 +513,16 @@ credential_file() {
 }
 
 read_credentials() {
-  local service="knowledge-sync:$1" file
+  local service="knowledge-sync:$1" file status
   if [[ "$(uname -s)" == Darwin ]] && command -v security >/dev/null; then
-    security find-generic-password -a "$USER" -s "$service" -w 2>/dev/null || true
+    if security find-generic-password -a "$USER" -s "$service" -w 2>/dev/null; then
+      return 0
+    else
+      status=$?
+      [[ "$status" == 44 ]] && return 0 # errSecItemNotFound
+      echo 'Knowledge Sync cannot read its macOS Keychain session. Run it in a local Mac Terminal, or pass a freshly verified --bootstrap-file when syncing over SSH.' >&2
+      return 1
+    fi
   elif command -v secret-tool >/dev/null; then
     secret-tool lookup service knowledge-sync domain "$1" 2>/dev/null || true
   else
@@ -527,7 +534,10 @@ read_credentials() {
 save_credentials() {
   local domain="$1" value="$2" service="knowledge-sync:$1" file
   if [[ "$(uname -s)" == Darwin ]] && command -v security >/dev/null; then
-    security add-generic-password -a "$USER" -s "$service" -w "$value" -U >/dev/null
+    if ! security add-generic-password -a "$USER" -s "$service" -w "$value" -U >/dev/null; then
+      echo 'Knowledge Sync could not save its OAuth session to macOS Keychain. Run it in a local Mac Terminal, or use a freshly verified --bootstrap-file over SSH.' >&2
+      return 1
+    fi
   elif command -v secret-tool >/dev/null; then
     printf '%s' "$value" | secret-tool store --label='Knowledge Sync OAuth' service knowledge-sync domain "$domain"
   else
@@ -549,14 +559,14 @@ save_token_response() {
   credentials="$(jq -nc --argjson token "$response" --arg client_id "$client_id" --arg client_secret "$client_secret" \
     --arg token_endpoint "$token_endpoint" --arg resource "$resource" --argjson expires_at "$expires_at" \
     '{access_token:$token.access_token,refresh_token:($token.refresh_token // ""),expires_at:$expires_at,client_id:$client_id,client_secret:$client_secret,token_endpoint:$token_endpoint,resource:$resource}')"
-  save_credentials "$base_url" "$credentials"
+  save_credentials "$base_url" "$credentials" || return 1
   jq -er '.access_token' <<<"$credentials"
 }
 
 get_oauth_token() {
   local base_url="$1" stored now refreshed resource_metadata issuer metadata redirect_uri registration
   local verifier challenge state authorize_url token_response client_id client_secret token_endpoint resource
-  stored="$(read_credentials "$base_url")"
+  stored="$(read_credentials "$base_url")" || return 1
   now="$(date +%s)"
   if [[ -n "$stored" ]] && [[ "$(jq -r '.expires_at // 0' <<<"$stored")" -gt $((now + 60)) ]]; then
     jq -er '.access_token' <<<"$stored"
@@ -570,7 +580,7 @@ get_oauth_token() {
     refresh_args=(--data-urlencode 'grant_type=refresh_token' --data-urlencode "refresh_token=$(jq -r '.refresh_token' <<<"$stored")" --data-urlencode "client_id=$client_id" --data-urlencode "resource=$resource")
     [[ -z "$client_secret" ]] || refresh_args+=(--data-urlencode "client_secret=$client_secret")
     if refreshed="$(token_request "$token_endpoint" "${refresh_args[@]}" 2>/dev/null)"; then
-      save_token_response "$base_url" "$refreshed" "$client_id" "$client_secret" "$token_endpoint" "$resource"
+      save_token_response "$base_url" "$refreshed" "$client_id" "$client_secret" "$token_endpoint" "$resource" || return 1
       return
     fi
     echo 'Saved OAuth session could not be refreshed; signing in again.' >&2
@@ -625,7 +635,7 @@ PY
   token_args=(--data-urlencode 'grant_type=authorization_code' --data-urlencode "code=$code" --data-urlencode "redirect_uri=$redirect_uri" --data-urlencode "code_verifier=$verifier" --data-urlencode "client_id=$client_id" --data-urlencode "resource=$resource")
   [[ -z "$client_secret" ]] || token_args+=(--data-urlencode "client_secret=$client_secret")
   token_response="$(token_request "$token_endpoint" "${token_args[@]}")"
-  save_token_response "$base_url" "$token_response" "$client_id" "$client_secret" "$token_endpoint" "$resource"
+  save_token_response "$base_url" "$token_response" "$client_id" "$client_secret" "$token_endpoint" "$resource" || return 1
 }
 
 mcp_post() {
@@ -662,7 +672,7 @@ else
   if [[ -z "$token" ]]; then
     command -v openssl >/dev/null || { echo 'openssl is required for interactive OAuth.' >&2; exit 1; }
     command -v python3 >/dev/null || { echo 'python3 is required for the OAuth callback.' >&2; exit 1; }
-    token="$(get_oauth_token "$base_url")"
+    token="$(get_oauth_token "$base_url")" || exit 1
   fi
 
   mcp_url="$base_url/mcp/knowledge"
