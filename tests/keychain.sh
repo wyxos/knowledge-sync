@@ -55,7 +55,10 @@ fi
 [[ -s "$MOCK_NETWORK_LOG" ]]
 ! grep -q 'cannot read its macOS Keychain session' "$test_root/output"
 
-source <(awk '/^(save_credentials|save_token_response)\(\) \{$/{copy=1} copy{print} copy && /^}$/ {copy=0}' install.sh)
+# Load a complete file: sourcing process substitution can close the pipe before
+# awk finishes writing on macOS. A separate command also checks extraction errors.
+awk '/^(save_credentials|save_token_response)\(\) \{$/{copy=1} copy{print} copy && /^}$/ {copy=0}' install.sh > "$test_root/credential-functions.sh"
+source "$test_root/credential-functions.sh"
 if save_token_response knowledge.test '{"access_token":"test-token"}' client-id '' endpoint resource > "$test_root/token-output" 2> "$test_root/save-error"; then
   echo 'Expected a Keychain save failure to prevent token use.' >&2
   exit 1
