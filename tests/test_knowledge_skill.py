@@ -296,6 +296,12 @@ class StandaloneTests(unittest.TestCase):
         self.assertFalse(self.shared.exists())
         self.assertFalse((self.root / "claude-custom/skills").exists())
 
+    @unittest.skipUnless(sys.platform == "win32", "Native PowerShell persistent command")
+    def test_persisted_powershell_command_forwards_named_flags_and_preview(self):
+        command = self.command()  # Check child fixture home before using it.
+        self.run_installer(["pwsh", "-NoProfile", "-File", str(ROOT / "tests/fixtures/powershell_alias.ps1"),
+                            str(ROOT / "install.ps1"), str(self.root)])
+
     def test_piped_installer_is_standalone(self):
         if sys.platform == "win32":
             self.command()  # Check fixture home before running piped code.

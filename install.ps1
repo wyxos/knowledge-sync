@@ -941,13 +941,26 @@ function Install-KnowledgeAlias([string] $DefaultDomain) {
     $aliasBlock = @"
 $aliasStart
 function global:knowledge-sync {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string] `$Domain = '$escapedDomain',
-        [Parameter(ValueFromRemainingArguments = `$true)] [object[]] `$Arguments
+        [string] `$Token,
+        [string] `$Target,
+        [string] `$BootstrapFile,
+        [switch] `$NoAlias,
+        [switch] `$NoCodexMcp,
+        [switch] `$NoClaudeMcp,
+        [switch] `$NoCursorMcp,
+        [switch] `$NoCursorRule,
+        [switch] `$NoSkills
     )
     `$headers = @{ Accept = 'application/vnd.github.raw+json'; 'User-Agent' = 'knowledge-sync' }
     `$source = Invoke-RestMethod -Headers `$headers -Uri 'https://api.github.com/repos/wyxos/knowledge-sync/contents/install.ps1'
-    & ([scriptblock]::Create([string] `$source)) -Domain `$Domain -NoAlias @Arguments
+    # Hashtable splatting preserves named parameters and switch values.
+    `$forwarded = @{} + `$PSBoundParameters
+    `$forwarded['Domain'] = `$Domain
+    `$forwarded['NoAlias'] = `$true
+    & ([scriptblock]::Create([string] `$source)) @forwarded
 }
 $aliasEnd
 "@
