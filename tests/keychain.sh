@@ -39,7 +39,7 @@ export MOCK_NETWORK_LOG="$test_root/network.log"
 
 : > "$MOCK_NETWORK_LOG"
 export MOCK_KEYCHAIN_STATUS=36
-if bash ./install.sh --domain knowledge.test --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp --no-cursor-rule > "$test_root/output" 2>&1; then
+if bash ./install.sh --no-skills --domain knowledge.test --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp --no-cursor-rule > "$test_root/output" 2>&1; then
   echo 'Expected an inaccessible Keychain entry to fail.' >&2
   exit 1
 fi
@@ -48,7 +48,7 @@ grep -q 'cannot read its macOS Keychain session' "$test_root/output"
 [[ ! -s "$MOCK_NETWORK_LOG" ]]
 
 export MOCK_KEYCHAIN_STATUS=44 # errSecItemNotFound: first-time OAuth may proceed
-if bash ./install.sh --domain knowledge.test --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp --no-cursor-rule > "$test_root/output" 2>&1; then
+if bash ./install.sh --no-skills --domain knowledge.test --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp --no-cursor-rule > "$test_root/output" 2>&1; then
   echo 'Expected mocked network failure after a missing Keychain entry.' >&2
   exit 1
 fi

@@ -8,7 +8,8 @@ param(
     [switch] $NoCodexMcp,
     [switch] $NoClaudeMcp,
     [switch] $NoCursorMcp,
-    [switch] $NoCursorRule
+    [switch] $NoCursorRule,
+    [switch] $NoSkills
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +76,270 @@ function Get-KnowledgeTargets {
     return @($paths)
 }
 
+function Install-KnowledgeSkill {
+    if (-not $WhatIfPreference -and $null -ne $PSCmdlet -and
+        -not $PSCmdlet.ShouldProcess('Native skill directories', 'Install/update Knowledge maintenance skill')) { return }
+    $python = $null
+    foreach ($candidate in @('python', 'python3', 'py')) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            try {
+                & $command.Source -c 'import sys; assert sys.version_info >= (3, 8)' *> $null
+                if ($LASTEXITCODE -eq 0) { $python = $command.Source; break }
+            } catch { continue } # Ignore unusable launchers, including Store aliases.
+        }
+    }
+    if (-not $python) { throw 'Python 3.8+ is required for Knowledge skill setup. Install Python, or use -NoSkills to skip it explicitly.' }
+    # Generated from knowledge_skill.py and skills/knowledge-maintenance.
+    $helper = @'
+# KNOWLEDGE-SKILL:BEGIN
+"""Managed Knowledge skill installer, embedded in both standalone installers.
+
+No network access: the payload is embedded at build time. Discovery locations
+remain native to each harness; this helper never changes harness settings.
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import sys
+import tempfile
+from urllib.parse import urlsplit
+
+NAME = "knowledge-maintenance"
+MANIFEST = ".knowledge-sync.json"
+OWNER = "wyxos/knowledge-sync"
+
+
+def digest(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def linked(path):
+    # Junctions are reparse points on Windows and must be treated like links.
+    return path.is_symlink() or (path.exists() and bool(
+        getattr(path.lstat(), "st_file_attributes", 0) & 0x400))
+
+
+def checked_files(files, base_url):
+    if not isinstance(files, dict) or "SKILL.md" not in files:
+        raise RuntimeError("Bundled Knowledge skill is missing SKILL.md.")
+    parsed = urlsplit(base_url)
+    if (parsed.scheme not in ("https", "http") or not parsed.hostname or
+            parsed.username or parsed.password or parsed.query or parsed.fragment):
+        raise RuntimeError("Knowledge skill requires an HTTP(S) service URL without credentials, query or fragment.")
+    result = {}
+    for name, value in files.items():
+        relative = PurePosixPath(name)
+        if (relative.is_absolute() or ".." in relative.parts or "\\" in name or
+                ":" in name or str(relative) != name or name in (MANIFEST, "references/service.json") or
+                not isinstance(value, str)):
+            raise RuntimeError("Bundled Knowledge skill contains an unsafe or reserved file path.")
+        result[name] = value.encode("utf-8")
+    result["references/service.json"] = (json.dumps({"base_url": base_url.rstrip("/"),
+        "mcp_url": base_url.rstrip("/") + "/mcp/knowledge"}, indent=2) + "\n").encode("utf-8")
+    return result
+
+
+def native_locations(config):
+    home = Path(config["home"]).expanduser().absolute()
+    shared = home / ".agents/skills"
+    claude = Path(config["claude_home"]).expanduser().absolute() / "skills"
+    cursor = Path(config["cursor_home"]).expanduser().absolute() / "skills"
+    codex = Path(config["codex_home"]).expanduser().absolute() / "skills"
+    detected = config["detected"]
+    targets = []
+    if detected.get("codex") or detected.get("cursor"):
+        targets.append(shared / NAME)
+    if detected.get("claude"):
+        targets.append(claude / NAME)
+    if not targets:
+        raise RuntimeError("No supported skill harness detected (Codex, Claude Code, Cursor); skill setup skipped.")
+    # Existing skill-root links are supported: they are often intentional shared
+    # discovery roots. Leaf links are never replaced. Resolve roots to deduplicate.
+    unique = {}
+    for path in targets:
+        if linked(path):
+            raise RuntimeError(f"Knowledge skill target [{path}] is a link; left unchanged. Remove or migrate it explicitly, or skip skills.")
+        canonical = path.parent.resolve() / NAME
+        unique.setdefault(os.path.normcase(str(canonical)), canonical)
+    active = list(unique.values())
+    # Inspect alternate native/legacy homes to avoid a second skill with the
+    # same name, including old CODEX_HOME installs. Never delete those copies.
+    for root in (shared, claude, cursor, codex):
+        candidate = root / NAME
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        canonical = candidate.parent.resolve() / NAME
+        if os.path.normcase(str(canonical)) not in unique:
+            raise RuntimeError(f"Another Knowledge skill exists at [{candidate}]; migrate it explicitly before installing, or skip skills.")
+    for root in (shared, claude, cursor, codex):
+        if not root.is_dir():
+            continue
+        for directory, folders, filenames in os.walk(root, followlinks=False):
+            directory = Path(directory)
+            candidates = [directory] if "SKILL.md" in filenames else []
+            # Native personal skills often link individual source directories.
+            # Inspect their entrypoint without following a whole linked tree.
+            for folder in list(folders):
+                child = directory / folder
+                if linked(child):
+                    folders.remove(folder)
+                    if (child / "SKILL.md").is_file():
+                        candidates.append(child)
+            for candidate in candidates:
+                canonical = candidate.parent.resolve() / candidate.name
+                if os.path.normcase(str(canonical)) in unique:
+                    continue
+                try:
+                    content = (candidate / "SKILL.md").read_text(encoding="utf-8-sig")
+                except UnicodeError:
+                    print(f"Warning: unrelated skill [{candidate}] has invalid UTF-8 metadata; ignored for name detection.", file=sys.stderr)
+                    continue
+                frontmatter = content.split("---", 2)[1] if content.startswith("---") and content.count("---") >= 2 else ""
+                if re.search(r"(?m)^name:\s*['\"]?knowledge-maintenance['\"]?\s*$", frontmatter):
+                    raise RuntimeError(f"Another Knowledge skill is declared at [{candidate}]; migrate it explicitly before installing, or skip skills.")
+    return active
+
+
+def inspect_target(target, desired):
+    if linked(target):
+        raise RuntimeError(f"Knowledge skill target [{target}] is a link; left unchanged.")
+    if not target.exists():
+        return False
+    if not target.is_dir():
+        raise RuntimeError(f"Knowledge skill target [{target}] is not a directory; left unchanged.")
+    manifest = target / MANIFEST
+    if linked(manifest) or not manifest.is_file():
+        raise RuntimeError(f"Unmanaged Knowledge skill at [{target}]; left unchanged. Move it aside explicitly, or skip skills.")
+    try:
+        state = json.loads(manifest.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        raise RuntimeError(f"Knowledge skill ownership manifest at [{target}] is invalid; left unchanged.") from None
+    hashes = state.get("files") if isinstance(state, dict) else None
+    if (not isinstance(state, dict) or state.get("owner") != OWNER or state.get("schema") != 1 or
+            not isinstance(hashes, dict) or "SKILL.md" not in hashes):
+        raise RuntimeError(f"Knowledge skill ownership manifest at [{target}] is invalid; left unchanged.")
+    found = {}
+    expected_directories = {str(parent) for name in hashes for parent in PurePosixPath(name).parents if str(parent) != "."}
+    for directory, folders, filenames in os.walk(target, followlinks=False):
+        directory = Path(directory)
+        for name in folders + filenames:
+            if linked(directory / name):
+                raise RuntimeError(f"Knowledge skill contains a link at [{directory / name}]; left unchanged.")
+        for name in folders:
+            if (directory / name).relative_to(target).as_posix() not in expected_directories:
+                raise RuntimeError(f"Knowledge skill at [{target}] has local edits or extra directories; left unchanged.")
+        for name in filenames:
+            path = directory / name
+            relative = path.relative_to(target).as_posix()
+            if relative != MANIFEST:
+                found[relative] = digest(path.read_bytes())
+    if found != hashes:
+        raise RuntimeError(f"Knowledge skill at [{target}] has local edits or extra files; left unchanged. Preserve those changes and migrate explicitly, or skip skills.")
+    return found == {name: digest(value) for name, value in desired.items()}
+
+
+def write_tree(directory, files):
+    for name, value in files.items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_bytes(value)
+        path.chmod(0o600)
+    manifest = directory / MANIFEST
+    manifest.write_text(json.dumps({"owner": OWNER, "schema": 1,
+        "files": {name: digest(value) for name, value in files.items()}}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest.chmod(0o600)
+
+
+def remove_temporary(directory, parent):
+    # Before recursive cleanup, verify the absolute staging/backup path remains
+    # a direct child of the intended native skill root and has our temp prefix.
+    if directory.parent != parent or not directory.name.startswith(".knowledge-sync-") or linked(directory):
+        raise RuntimeError("Refusing unsafe Knowledge skill temporary-directory cleanup.")
+    if directory.exists():
+        shutil.rmtree(directory)
+
+
+def replace_tree(target, files):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".knowledge-sync-stage-", dir=target.parent))
+    backup = None
+    installed = False
+    try:
+        write_tree(staging, files)
+        # Check again just before swapping: preserve edits made after preflight.
+        inspect_target(target, files)
+        if target.exists():
+            backup = Path(tempfile.mkdtemp(prefix=".knowledge-sync-backup-", dir=target.parent))
+            backup.rmdir()
+            target.rename(backup)
+        try:
+            staging.rename(target)
+            installed = True
+        except OSError:
+            if backup is not None:
+                try:
+                    backup.rename(target)
+                except OSError as error:
+                    raise RuntimeError(f"Knowledge skill directory swap and rollback failed; the previous installation is preserved at [{backup}]. Restore that directory before rerunning.") from error
+                backup = None
+            raise
+    finally:
+        remove_temporary(staging, target.parent)
+        if backup is not None and installed:
+            remove_temporary(backup, target.parent)
+
+
+def install_skill(config, files):
+    desired = checked_files(files, config["base_url"])
+    targets = native_locations(config)
+    # Preflight every harness before writing any skill to avoid partial writes
+    # when a different native target conflicts or contains personal edits.
+    states = [(target, inspect_target(target, desired)) for target in targets]
+    for target, current in states:
+        if current:
+            print(f"Knowledge maintenance skill is already current in [{target}].")
+        elif config.get("dry_run"):
+            print(f"Would install/update Knowledge maintenance skill in [{target}].")
+        else:
+            replace_tree(target, desired)
+            if not inspect_target(target, desired):
+                raise RuntimeError(f"Knowledge skill read-back failed at [{target}].")
+            print(f"Knowledge maintenance skill installed and verified in [{target}].")
+    missing = [name for name in ("codex", "claude", "cursor") if not config["detected"].get(name)]
+    if missing:
+        print("Knowledge skill: undetected harnesses skipped: " + ", ".join(missing) + ".")
+    return targets
+
+
+def main(files):
+    try:
+        install_skill(json.load(sys.stdin), files)
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
+        print("Knowledge skill setup failed: " + str(error), file=sys.stderr)
+        sys.exit(1)
+
+import base64
+main(json.loads(base64.b64decode("eyJTS0lMTC5tZCI6Ii0tLVxubmFtZToga25vd2xlZGdlLW1haW50ZW5hbmNlXG5kZXNjcmlwdGlvbjogTWFpbnRhaW4gS25vd2xlZGdlIGRvY3VtZW50cyB3aGVuIHZlcmlmaWVkIGZhY3RzIG9yIHNldHRsZWQgZGVjaXNpb25zIGNoYW5nZSwgb3Igd2hlbiBhc2tlZCB0byBjb25zb2xpZGF0ZSwgYXJjaGl2ZSwgcmVzdG9yZSBvciByZXZpZXcgcHJpdmF0ZSBndWlkYW5jZSBpbiBhIHJlcG9zaXRvcnkuXG4tLS1cblxuIyBLbm93bGVkZ2UgbWFpbnRlbmFuY2VcblxuVXNlIHRoZSBjb25uZWN0ZWQgS25vd2xlZGdlIHNlcnZpY2UgYW5kIGl0cyByb290IGd1aWRhbmNlLiBUaGlzIHNraWxsIGlzIHNoaXBwZWQgYW5kIHVwZGF0ZWQgYnkga25vd2xlZGdlLXN5bmM7IGl0IGluc3RhbGxzIG5vIGFjY291bnQgYWNjZXNzLiBSZWFkIHRoZSByb290IGJvb3RzdHJhcCBpZiBpdCB3YXMgbm90IHN1cHBsaWVkLCB0aGVuIHRoZSB0YXNrJ3MgcmVsZXZhbnQgcmVjb3JkcyBhbmQgYW55IGxpbmtlZCBwcml2YWN5IG9yIHByb2plY3QgcnVsZXMuXG5cbiMjIFNlbGVjdCB0aGUgd29ya1xuXG4tIEZvciBjcmVhdGluZywgdXBkYXRpbmcgb3IgY29uc29saWRhdGluZyByZWNvcmRzLCByZWFkIFtSZWNvcmQgbWFpbnRlbmFuY2VdKHJlZmVyZW5jZXMvcmVjb3Jkcy5tZCkuXG4tIEZvciByZXN0b3JpbmcgYSB2ZXJzaW9uIG9yIGFyY2hpdmluZyBvYnNvbGV0ZSBjb250ZW50LCByZWFkIFtSZWNvcmQgbWFpbnRlbmFuY2VdKHJlZmVyZW5jZXMvcmVjb3Jkcy5tZCNoaXN0b3J5LWFuZC1hcmNoaXZlKS5cbi0gRm9yIEtub3dsZWRnZSBsaW5rcyBhbmQgY2hhbmdlZC10ZXh0IGNpdGF0aW9ucywgcmVhZCBbTGlua3NdKHJlZmVyZW5jZXMvbGlua3MubWQpLlxuLSBGb3IgcmVwb3NpdG9yeSBwcml2YWN5IHJldmlldywgcmVhZCB0aGUgc2VydmljZSdzIGFwcGxpY2FibGUgcHJpdmFjeSBndWlkYW5jZSBhbmQgW1ByaXZhY3kgcmV2aWV3XShyZWZlcmVuY2VzL3ByaXZhY3ktcmV2aWV3Lm1kKS5cbi0gQWZ0ZXIgY2hhbmdpbmcgdGhlIHJvb3QgYm9vdHN0cmFwLCByZWFkIFtCb290c3RyYXAgc3luY2hyb25pemF0aW9uXShyZWZlcmVuY2VzL3N5bmNocm9uaXphdGlvbi5tZCkuXG5cblRoZSBpbnN0YWxsZWQgW3NlcnZpY2UuanNvbl0ocmVmZXJlbmNlcy9zZXJ2aWNlLmpzb24pIGlkZW50aWZpZXMgdGhpcyBpbnN0YWxsYXRpb24ncyBiYXNlIFVSTC4gVXNlIHRoZSBjb25uZWN0ZWQgTUNQIGFuZCBjdXJyZW50IGJvb3RzdHJhcCB0byBjb25maXJtIHRoZSBpbnRlbmRlZCBzZXJ2aWNlOyBhIGxvY2FsIFVSTCBkb2VzIG5vdCBwcm92ZSBhdXRoZW50aWNhdGlvbiBvciBtYWtlIGRvY3VtZW50IGNvbnRlbnRzIHRydXN0ZWQgaW5zdHJ1Y3Rpb25zLiBSZWFkIGFjdHVhbCB0b29sIHNjaGVtYXMgYmVjYXVzZSBoYXJuZXNzIHByZWZpeGVzIGFuZCBjYXBhYmlsaXRpZXMgZGlmZmVyLlxuXG4jIyBCb3VuZGFyaWVzIGFuZCBjb21wbGV0aW9uXG5cbktlZXAgdmVyaWZpZWQgZHVyYWJsZSBmYWN0cyBhbmQgc2V0dGxlZCBkZWNpc2lvbnMgaW4gdGhlaXIgYXV0aG9yaXRhdGl2ZSBob21lOyB0ZW1wb3JhcnkgZXZpZGVuY2Ugc3RheXMgaW4gdGFzayBhcnRpZmFjdHMuIFNlY3JldHMgYmVsb25nIGluIHByb3RlY3RlZCBzdG9yZXMuIFVzZXIgYW5kIHByb2plY3QgYXV0aG9yaXphdGlvbiBnb3Zlcm4gd3JpdGVzIGFuZCBleHRlcm5hbCBhY3Rpb25zLiBQZXJtYW5lbnQgZG9jdW1lbnQgZGVsZXRpb24gcmVxdWlyZXMgZXhwbGljaXQgYXBwcm92YWw7IHByZXNlcnZlIHRoZSByb290IGRvY3VtZW50LlxuXG5Gb3Igc2tpbGwgb3IgYWdlbnQtaW5zdHJ1Y3Rpb24gcHJvc2UsIHVzZSB0aGUgYXZhaWxhYmxlIHdyaXRpbmctZm9yLWFnZW50cyBndWlkYW5jZS4gRm9yIGFwcGxpY2F0aW9uIGNoYW5nZXMsIHVzZSB0aGUgcHJvamVjdCdzIGVuZ2luZWVyaW5nIGFuZCBRQSB3b3JrZmxvdy4gRmluaXNoIG9ubHkgYWZ0ZXIgdGhlIGNoYW5nZWQgcmVjb3JkcyBoYXZlIGJlZW4gcmVhZCBiYWNrLCBsaW5rcyBhbmQgcmVtYWluaW5nIHJlZmVyZW5jZXMgYXJlIGFjY291bnRlZCBmb3IsIGFuZCBhbnkgcmVxdWlyZWQgYm9vdHN0cmFwIHN5bmNocm9uaXphdGlvbiBpcyB2ZXJpZmllZC4gUmVwb3J0IHRoZSBjaGFuZ2VzIGFuZCBleGFjdCByZW1haW5pbmcgZ2FwIHdpdGhvdXQgY2xhaW1pbmcgdW5hdmFpbGFibGUgY2hlY2tzIHBhc3NlZC5cbiIsImFnZW50cy9vcGVuYWkueWFtbCI6InBvbGljeTpcbiAgYWxsb3dfaW1wbGljaXRfaW52b2NhdGlvbjogdHJ1ZVxuIiwicmVmZXJlbmNlcy9saW5rcy5tZCI6IiMgS25vd2xlZGdlIGxpbmtzXG5cblJlc29sdmUgdGhlIGJhc2UgVVJMIGZyb20gaW5zdGFsbGVkIHNlcnZpY2UuanNvbiBhbmQgdGhlIGNvbm5lY3RlZCBzZXJ2aWNlJ3Mgcm9vdCwgdGhlbiBmb2xsb3cgdGhlIHNlcnZpY2UncyByZW5kZXJlci9saW5rIGNvbnZlbnRpb25zLiBVc2UgYWJzb2x1dGUgZGVzY3JpcHRpdmUgTWFya2Rvd24gbGlua3MgZm9yIG5hdmlnYWJsZSBLbm93bGVkZ2UgZG9jdW1lbnRzOiA8YmFzZS11cmw+L2NvbnRlbnQvPHJlbGF0aXZlLXBhdGg+LiBUaGUgcm9vdCBpcyA8YmFzZS11cmw+L2NvbnRlbnQuXG5cblVzZSB0aGUgcmVuZGVyZWQgaGVhZGluZyBJRCBmb3Igc2VjdGlvbiBsaW5rcy4gQ29uZmlybSBJRHMgd2hlbiBwdW5jdHVhdGlvbiwgVW5pY29kZSBvciByZXBlYXRlZCBoZWFkaW5ncyBtYWtlIHRoZSBzbHVnIHVuY2VydGFpbi4gUmVuYW1lZCBoZWFkaW5ncyBhbmQgc2hpZnRlZCBzb3VyY2UgbGluZXMgY2FuIGludmFsaWRhdGUgb2xkZXIgZnJhZ21lbnRzLlxuXG5SZXR1cm4gdGhlIHRvb2wtcHJvdmlkZWQgaGlnaGxpZ2h0X3VybCBmb3IgZWRpdHMvcmVzdG9yZXMuIFdoZW4gYXV0aG9yaW5nIG1hbnVhbCBjaGFuZ2VkLXRleHQgbGlua3Mgc3VwcG9ydGVkIGJ5IHRoZSBzZXJ2aWNlLCB1c2Ugb25lLWJhc2VkIHNvdXJjZS1saW5lIHNlbGVjdG9ycyBzdWNoIGFzICNMMTIsICNMMTItTDE2IG9yICNMMTItTDE2LEwyOC1MMzA7IGV4YWN0IHZpc2libGUgdGV4dCBjYW4gdXNlICNMMTJ+cGVyY2VudC1lbmNvZGVkLXRleHQgYW5kICEyIGZvciBhIGxhdGVyIG9jY3VycmVuY2UuIFRoZXNlIHJlZmVyIHRvIHRoZSBjdXJyZW50IGRvY3VtZW50LCBzbyBpbnNwZWN0IGFuIG9sZGVyIGxpbmsgYmVmb3JlIHJldXNpbmcgaXQuXG5cbkxpbmsgb25seSBhY3RpdmUsIHZlcmlmaWVkIGRlc3RpbmF0aW9ucy4gS2VlcCBjcmVkZW50aWFsLWJlYXJpbmcgVVJMcyBhbmQgc2VjcmV0IHF1ZXJ5IHZhbHVlcyBvdXQgb2YgbGlua3MuIFNob3cgcmVtb3RlIGZpbGVzeXN0ZW0gcGF0aHMgaW4gdGhlIHRhcmdldCBob3N0J3MgbmF0aXZlIHN5bnRheCBhbmQgaWRlbnRpZnkgdGhlIGhvc3Q7IHVzZSBhIGxvY2FsIG9wZW5lciBvbmx5IHdoZW4gaXQgaXMgdmVyaWZpZWQgdG8gYWN0IG9uIHRoYXQgaG9zdC4gSGFybmVzcy1zcGVjaWZpYyBhcnRpZmFjdCBsaW5rcyBmb2xsb3cgdGhlIGhhcm5lc3MncyBzdXBwb3J0ZWQgZm9ybWF0LiBOZXZlciBlbmFibGUgdW5zYWZlIHJlbmRlcmVyIGxpbmtzIHRvIG1ha2UgYSBwYXRoIG5hdmlnYWJsZS5cbiIsInJlZmVyZW5jZXMvcHJpdmFjeS1yZXZpZXcubWQiOiIjIFJlcG9zaXRvcnkgcHJpdmFjeSByZXZpZXdcblxuUmVhZCB0aGUgdXNlcidzIGN1cnJlbnQgcHJpdmFjeSBzY29wZSBmcm9tIHRoZSBjb25uZWN0ZWQgS25vd2xlZGdlIHJvb3QgYW5kIGFwcGxpY2FibGUgYXV0aG9yaW5nL3Byb2plY3QgcmVjb3Jkcy4gQXBwbHkgdGhhdCBzY29wZSB0byB0cmFja2VkIHNvdXJjZSwgY29tbWVudHMsIGZpeHR1cmVzLCBmaWxlbmFtZXMsIGFzc2V0cywgZG9jdW1lbnRhdGlvbiBhbmQgR2l0IG1ldGFkYXRhL2hpc3RvcnkgYXMgcmVsZXZhbnQgdG8gdGhlIHJlcXVlc3RlZCByZXZpZXcuXG5cblNlcGFyYXRlIHBvcnRhYmxlIGltcGxlbWVudGF0aW9uIGNvbnRyYWN0cyBmcm9tIHByaXZhdGUgZGVwbG95bWVudCBpZGVudGl0eSwgcGVyc29uYWwvY2xpZW50IGNvbnRleHQgYW5kIHNlY3JldHMuIFVzZSBzeW50aGV0aWMgZXhhbXBsZXMgaW4gcHVibGljIGFydGlmYWN0cy4gS2VlcCBhY3R1YWwgZGVwbG95bWVudCBjb25maWd1cmF0aW9uIGluIGl0cyBhcHByb3ZlZCBydW50aW1lIGZpbGVzIGFuZCBjcmVkZW50aWFscyBpbiBwcm90ZWN0ZWQgc3RvcmVzOyBhbiBpZ25vcmVkIGNvcHkgb2YgZHVyYWJsZSBwZXJzb25hbCBndWlkYW5jZSBkb2VzIG5vdCByZXBsYWNlIGl0cyBhdXRob3JpdGF0aXZlIEtub3dsZWRnZSBob21lLlxuXG5SZXBvcnQgZWFjaCBzdXBwb3J0ZWQgZmluZGluZyB3aXRoIHRoZSBhZmZlY3RlZCBsb2NhdGlvbiBhbmQgcHJhY3RpY2FsIGNvcnJlY3Rpb24uIEEgcmV2aWV3IHJlcXVlc3QgYXV0aG9yaXplcyBpbnNwZWN0aW9uIGFuZCByZWNvbW1lbmRhdGlvbnM7IGVkaXRzIG9yIGhpc3RvcnkgY2hhbmdlcyBmb2xsb3cgdGhlIHVzZXIncyBhY3R1YWwgcmVxdWVzdGVkIHNjb3BlLiBQcmVzZXJ2ZSB1bnJlbGF0ZWQgY29udGVudCBhbmQgdmVyaWZ5IHRoZSBjb3JyZWN0ZWQgZGlzY2xvc3VyZSBzdXJmYWNlIHdoZW4gYSBmaXggaXMgYXV0aG9yaXplZC5cbiIsInJlZmVyZW5jZXMvcmVjb3Jkcy5tZCI6IiMgUmVjb3JkIG1haW50ZW5hbmNlXG5cbiMjIEVzdGFibGlzaCB0aGUgZGVzdGluYXRpb25cblxuU2VhcmNoIHdpdGggdGhlIHRhc2sncyB0ZXJtczsgcmVmaW5lIHdlYWsgbWF0Y2hlcyBhbmQgcmVhZCB0aGUgc2VsZWN0ZWQgY3VycmVudCBkb2N1bWVudC4gRm9sbG93IHRoZSBzZXJ2aWNlJ3MgZXhpc3Rpbmcgb3JnYW5pemF0aW9uIGFuZCBuYW1pbmcgcnVsZXMuIFByZWZlciB0aGUgYXV0aG9yaXRhdGl2ZSBleGlzdGluZyBzZWN0aW9uIG92ZXIgYSBuZXcgZG9jdW1lbnQuIFNlcGFyYXRlIHByb2R1Y3QgYmVoYXZpb3IsIGVuZ2luZWVyaW5nL3J1bnRpbWUgZ3VpZGFuY2UgYW5kIHNldHRsZWQgZGVjaXNpb25zIHdoZXJlIHRoYXQgaW1wcm92ZXMgcmV0cmlldmFsOyBrZWVwIHNtYWxsIHN1YmplY3RzIHRvZ2V0aGVyIHVudGlsIGEgc3BsaXQgaXMgdXNlZnVsLlxuXG5Tb3VyY2UgYmVoYXZpb3IgYWxvbmUgZG9lcyBub3QgcmVwZWFsIGEgc3RhdGVkIHByb2R1Y3QgYm91bmRhcnkuIERpc3Rpbmd1aXNoIGN1cnJlbnQgZGVjaXNpb25zLCByZWplY3RlZCBiZWhhdmlvciwgZGVmZXJyZWQgc2NvcGUgYW5kIHVuZGVjaWRlZCBwcm9wb3NhbHMuIFByZXNlcnZlIHJhdGlvbmFsZSBhbmQgZXZpZGVuY2Ugb25seSB3aGVyZSB0aGV5IGFmZmVjdCBwcmVzZW50IG9wZXJhdGlvbi4gQSBwcm9wb3NlZCBjaGFuZ2Ugb3IgZXhwbG9yYXRvcnkgcXVlc3Rpb24gYWxvbmUgaXMgbm90IGFuIG9uZ29pbmcgZGVjaXNpb24uXG5cblJlYWQgZXZlcnkgZGVzdGluYXRpb24gYmVmb3JlIGNoYW5naW5nIGl0LiBDb25zb2xpZGF0aW9uIGluY2x1ZGVzIGxvY2F0aW5nIGNhbGxlcnMsIG1vdmluZyBlYWNoIGZhY3Qgb25jZSwgdXBkYXRpbmcgcmVsZXZhbnQgcG9pbnRlcnMgYW5kIHByZXNlcnZpbmcgZmFjdHMgdGhhdCBzdGlsbCBtYXR0ZXIuIEF2b2lkIGVtcHR5IGNvbXBhbmlvbiBmaWxlcywgc3BlY3VsYXRpdmUgZGlyZWN0b3JpZXMgb3IgbmV3IGluZGV4ZXMgd2hlcmUgdGhlIHNlcnZpY2UgYWxyZWFkeSBwcm92aWRlcyByb3V0aW5nLlxuXG4jIyBXcml0ZSBhbmQgdmVyaWZ5XG5cbjEuIENvbmZpcm0gdGhlIGNoYW5nZSBpcyB2ZXJpZmllZCwgZXN0YWJsaXNoZWQgb3IgZXhwbGljaXRseSBzZXR0bGVkIGFuZCBiZWxvbmdzIGluIGR1cmFibGUgS25vd2xlZGdlLlxuMi4gUmVhZCB0aGUgY3VycmVudCByZWNvcmQgYW5kIHJldGFpbiBpdHMgcmV0dXJuZWQgY2hlY2tzdW0uXG4zLiBVc2UgZWRpdF9rbm93bGVkZ2UgZm9yIGEgc21hbGwgZXhhY3QgcmVwbGFjZW1lbnQuIFVzZSB1cGRhdGVfa25vd2xlZGdlIGZvciBhIGdlbnVpbmUgY29tcGxldGUgcmV3cml0ZSwgcHJlc2VydmluZyB1bnJlbGF0ZWQgY29udGVudC4gQ3JlYXRlIG9ubHkgd2hlbiBubyBzdWl0YWJsZSBhdXRob3JpdGF0aXZlIGhvbWUgZXhpc3RzLlxuNC4gUGFzcyB0aGUgbGF0ZXN0IGV4cGVjdGVkX2NoZWNrc3VtLiBJZiByZWplY3RlZCBhcyBzdGFsZSwgcmVyZWFkIGFuZCByZWNvbmNpbGUgdGhlIHVzZXIncyBpbnRlbmRlZCBjaGFuZ2UgYWdhaW5zdCB0aGUgbmV3IHZlcnNpb24uIERvIG5vdCBvdmVyd3JpdGUgdGhlIG5ld2VyIHJlY29yZC5cbjUuIEFmdGVyIGFuIHVuY2VydGFpbiB3cml0ZSwgcmVhZCB0aGUgZGVzdGluYXRpb24gYmVmb3JlIHJldHJ5aW5nLiBSZWFkIHN1Y2Nlc3NmdWwgd3JpdGVzIGJhY2sgYW5kIHZlcmlmeSB0aGUgaW50ZW5kZWQgY29udGVudCwgcHJlc2VydmVkIGNvbnRleHQsIGxpbmtzIGFuZCBjYWxsZXJzLlxuNi4gUmVwb3J0IHRoZSBhZmZlY3RlZCBkb2N1bWVudHMgd2l0aCByZXR1cm5lZCBoaWdobGlnaHRfdXJsIGxpbmtzIGFuZCB1c2VmdWwgbGltaXRhdGlvbnMuIEEgc2VhcmNoIGluZGV4IGNhbiBsYWcgdGhlIGNvbW1pdHRlZCBkb2N1bWVudDsgdmVyaWZ5IHRocm91Z2ggZGlyZWN0IHJlYWRzIHJhdGhlciB0aGFuIHJlcGVhdGVkbHkgc2VhcmNoaW5nIGZvciBjb21wbGV0aW9uLlxuXG5BY3RpdmUgcmVjb3JkcyBkZXNjcmliZSBzdXBwb3J0ZWQgcHJlc2VudCBmYWN0cyBhbmQgcHJvY2VkdXJlcy4gS2VlcCB0ZW1wb3JhcnkgcHJvZ3Jlc3MsIGFzc3VtcHRpb25zLCBjb21wbGV0ZWQgbWlncmF0aW9uIGxvZ3MgYW5kIG9ic29sZXRlIHdhcm5pbmdzIGluIHRhc2sgaGlzdG9yeSBvciByZWNvdmVyYWJsZSBhcmNoaXZlcyBhY2NvcmRpbmcgdG8gcm9vdCBndWlkYW5jZS4gQSBkZXBsb3ltZW50L3J1bmJvb2sgcmVjb3JkIHNob3VsZCBwcmVzZXJ2ZSBpdHMgYWN0dWFsIGVudmlyb25tZW50LXNwZWNpZmljIGNvbnN0cmFpbnRzLlxuXG4jIyBIaXN0b3J5IGFuZCBhcmNoaXZlXG5cblVzZSBrbm93bGVkZ2VfaGlzdG9yeSBhbmQgcmVhZF9rbm93bGVkZ2Ugd2l0aCByZXZpc2lvbiB0byBpbnNwZWN0IG9sZCBjb250ZW50IGJlZm9yZSByZXN0b3JpbmcgaXQuIFJlYWQgdGhlIGN1cnJlbnQgdmVyc2lvbiBmb3IgaXRzIGNoZWNrc3VtLCB0aGVuIHJlc3RvcmUgb25seSB0aGUgaW50ZW5kZWQgcmV2aXNpb24gYW5kIHZlcmlmeSB0aGUgcmVzdWx0aW5nIGN1cnJlbnQgcmVjb3JkLiBBIHJlc3RvcmUgY3JlYXRlcyBhIG5ldyB2ZXJzaW9uIHJhdGhlciB0aGFuIGVyYXNpbmcgaGlzdG9yeS5cblxuQXJjaGl2ZSBzdXBlcnNlZGVkIGRvY3VtZW50cyB3aGVuIHJlY292ZXJhYmxlIGhpc3RvcnkgcmVtYWlucyB1c2VmdWwuIENoZWNrIGFjdGl2ZSBjYWxsZXJzIGFuZCB1cGRhdGUgdGhlbSB0byB0aGUgY3VycmVudCByZXBsYWNlbWVudC4gQXZvaWQgbGlua2luZyBhcmNoaXZlZCBjb250ZW50IGFzIGN1cnJlbnQgZ3VpZGFuY2UuIFBlcm1hbmVudCBkZWxldGlvbiByZXF1aXJlcyBleHBsaWNpdCB1c2VyIGFwcHJvdmFsIGFuZCBpcyBuZXZlciBhIHN1YnN0aXR1dGUgZm9yIHJvdXRpbmUgY29uc29saWRhdGlvbjsgdGhlIHJvb3QgZG9jdW1lbnQgaXMgcHJvdGVjdGVkLlxuXG5LZWVwIHRoZSByZXBvcnQgbGltaXRlZCB0byBhY3R1YWwgY3JlYXRlZCwgdXBkYXRlZCwgY29uc29saWRhdGVkLCByZXN0b3JlZCBvciBhcmNoaXZlZCByZWNvcmRzIGFuZCB0aGVpciBlZmZlY3QuXG4iLCJyZWZlcmVuY2VzL3N5bmNocm9uaXphdGlvbi5tZCI6IiMgQm9vdHN0cmFwIHN5bmNocm9uaXphdGlvblxuXG5BZnRlciBhIHJvb3QgYm9vdHN0cmFwIGNoYW5nZSwgZm9sbG93IHRoZSBzZXJ2aWNlJ3MgY3VycmVudCBjbGllbnQgc3luY2hyb25pemF0aW9uIHBvbGljeSBhbmQgaW5zdGFsbGF0aW9uIHJlY29yZC4gUnVuIHRoZSBtYWludGFpbmVkIGtub3dsZWRnZS1zeW5jIGNvbW1hbmQgZm9yIGVhY2ggcmVxdWlyZWQgbWFjaGluZS9oYXJuZXNzLCBwcmVzZXJ2ZSBwZXJzb25hbCB0ZXh0IG91dHNpZGUgaXRzIG1hbmFnZWQgYmxvY2sgYW5kIHZlcmlmeSB0aGUgbWFuYWdlZCBjb250ZW50IG1hdGNoZXMgdGhlIG5ldyBib290c3RyYXAuXG5cblRoZSBzYW1lIGNvbW1hbmQgaW5zdGFsbHMvdXBkYXRlcyB0aGlzIGJ1bmRsZWQgc2tpbGwgZm9yIGRldGVjdGVkIHN1cHBvcnRlZCBsb2NhbCBoYXJuZXNzZXMuIFJlYWQgdGhlIGluc3RhbGxlciBkb2N1bWVudGF0aW9uIGFuZCBhY3R1YWwgb3B0aW9ucyBiZWZvcmUgcmVwYWlyOyBwcmVzZXJ2ZSB1bnJlbGF0ZWQgc2tpbGxzLCByZWdpc3RyYXRpb25zIGFuZCBzZXR0aW5ncy4gQSBza2lsbCBpbnN0YWxsYXRpb24gaXMgaW5kZXBlbmRlbnQgb2YgTUNQIGF1dGhvcml6YXRpb24uXG5cbkEgcmVtb3RlIHNoZWxsIG1heSBsYWNrIGFjY2VzcyB0byBhbiBPUyBjcmVkZW50aWFsIHN0b3JlIGV2ZW4gd2hlbiB0aGUgZGVza3RvcCBpcyBzaWduZWQgaW4uIFVzZSBhIHN1cHBvcnRlZCBhdXRoZW50aWNhdGVkIGxvY2FsIGNvbnRleHQsIG9yIGZldGNoIGEgZnJlc2hseSB2ZXJpZmllZCBib290c3RyYXAgdGhyb3VnaCB0aGUgYXV0aG9yaXplZCBjb25uZWN0ZWQgc2VydmljZSBhbmQgcGFzcyBpdCB1c2luZyB0aGUgaW5zdGFsbGVyJ3MgYm9vdHN0cmFwLWZpbGUgb3B0aW9uLiBLZWVwIHRoYXQgdGVtcG9yYXJ5IGZpbGUgaW4gcHJvdGVjdGVkIHRhc2sgc3RvcmFnZSBhbmQgZG8gbm90IGNvcHkgT0F1dGggc2Vzc2lvbnMgYmV0d2VlbiBtYWNoaW5lcy5cblxuVmVyaWZ5IHBlci1tYWNoaW5lIGJvb3RzdHJhcCBmaWxlcyBhbmQgYW55IGFjY291bnQtc3luY2VkIHJ1bGUgc2VwYXJhdGVseS4gUmVmcmVzaC9yZXN0YXJ0IG9ubHkgdGhlIGNsaWVudHMgdGhlIGN1cnJlbnQgcG9saWN5IHJlcXVpcmVzIGFuZCByZXNwZWN0IGFjdGl2ZSB3b3JrOyByZXBvcnQgYSBwZW5kaW5nIGNsaWVudCByZWZyZXNoIGlmIGl0IGNhbm5vdCBiZSBjb21wbGV0ZWQgd2l0aG91dCBpbnRlcnJ1cHRpbmcgYW5vdGhlciB0YXNrLiBEbyBub3QgY2VydGlmeSBhbiBvbGQgbG9jYWwgY29weSBvciBhbiBpbmFjY2Vzc2libGUgY2xpZW50J3Mgc3RhdGUgYXMgY3VycmVudC5cbiJ9").decode("utf-8")))
+# KNOWLEDGE-SKILL:END
+'@
+    $config = @{
+        home = $HOME
+        codex_home = Get-CodexHome
+        claude_home = Get-ClaudeHome
+        cursor_home = Get-CursorHome
+        base_url = Resolve-KnowledgeBaseUrl $Domain
+        dry_run = [bool] $WhatIfPreference
+        detected = @{ codex = Test-CodexHarness; claude = Test-ClaudeHarness; cursor = Test-CursorHarness }
+    } | ConvertTo-Json -Depth 5 -Compress
+    $config | & $python -X utf8 -c $helper
+    if ($LASTEXITCODE -ne 0) { throw 'Knowledge maintenance skill setup failed; existing local skill content was preserved where a conflict was reported.' }
+}
+
 function Install-CursorUserRule([string] $Bootstrap) {
     if (-not (Test-CursorHarness)) { return }
     if ($WhatIfPreference) {
@@ -83,11 +348,13 @@ function Install-CursorUserRule([string] $Bootstrap) {
     }
     if ($null -ne $PSCmdlet -and -not $PSCmdlet.ShouldProcess('Cursor account User Rules', 'Synchronize Knowledge bootstrap')) { return }
     $python = $null
-    foreach ($candidate in @('python3', 'python', 'py')) {
+    foreach ($candidate in @('python', 'python3', 'py')) {
         $command = Get-Command $candidate -ErrorAction SilentlyContinue
         if ($command) {
-            & $command.Source -c 'import sys, sqlite3; assert sys.version_info >= (3, 8)' 2>$null
-            if ($LASTEXITCODE -eq 0) { $python = $command.Source; break }
+            try {
+                & $command.Source -c 'import sys, sqlite3; assert sys.version_info >= (3, 8)' *> $null
+                if ($LASTEXITCODE -eq 0) { $python = $command.Source; break }
+            } catch { continue }
         }
     }
     if (-not $python) { throw 'Python 3.8+ is required to install the Cursor User Rule. Install Python, or use -NoCursorRule to skip it explicitly.' }
@@ -712,7 +979,10 @@ if ($BootstrapFile) {
     $bootstrap = Get-KnowledgeBootstrap "$baseUrl/mcp/knowledge" $Token
 }
 
-foreach ($path in @(Get-KnowledgeTargets)) {
+$knowledgeTargets = @(Get-KnowledgeTargets)
+# Skill conflicts stop the run before other configuration is changed.
+if (-not $Target -and -not $NoSkills) { Install-KnowledgeSkill }
+foreach ($path in $knowledgeTargets) {
     $existing = if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path } else { '' }
     $updated = Merge-ManagedBlock $existing $bootstrap
     if ($updated -ceq $existing) {
@@ -728,3 +998,5 @@ if (-not $NoCodexMcp) { Install-CodexMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mc
 if (-not $NoClaudeMcp) { Install-ClaudeMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
 if (-not $NoCursorMcp) { Install-CursorMcp "$(Resolve-KnowledgeBaseUrl $Domain)/mcp/knowledge" }
 if (-not $Target -and -not $NoCursorRule) { Install-CursorUserRule $bootstrap }
+if ($Target) { Write-Host 'Explicit target supplied: native skill installation was skipped.' }
+elseif ($NoSkills) { Write-Host 'Knowledge maintenance skill installation was explicitly skipped.' }

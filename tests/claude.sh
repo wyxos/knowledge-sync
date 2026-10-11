@@ -14,7 +14,7 @@ printf '# Bootstrap\n' > "$root/bootstrap.md"
 printf '# Personal Claude guidance\n' > "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 printf '%s\n' '{"mcpServers":{"other":{"command":"example"}},"custom":{"preserve":true}}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
-./install.sh --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
+./install.sh --no-skills --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
 grep -q '# Personal Claude guidance' "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 grep -q '# Bootstrap' "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 "$python_bin" - "$CLAUDE_CONFIG_DIR/.claude.json" <<'PY'
@@ -26,20 +26,20 @@ assert config["mcpServers"]["knowledge"] == {"type": "http", "url": "https://kno
 PY
 cp "$CLAUDE_CONFIG_DIR/CLAUDE.md" "$root/first.md"
 cp "$CLAUDE_CONFIG_DIR/.claude.json" "$root/first.json"
-./install.sh --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
+./install.sh --no-skills --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
 cmp "$root/first.md" "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 cmp "$root/first.json" "$CLAUDE_CONFIG_DIR/.claude.json"
 
 printf '# Updated bootstrap\n' > "$root/bootstrap.md"
-./install.sh --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule --dry-run > "$root/preview.txt"
+./install.sh --no-skills --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule --dry-run > "$root/preview.txt"
 cmp "$root/first.md" "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 cmp "$root/first.json" "$CLAUDE_CONFIG_DIR/.claude.json"
-./install.sh --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
+./install.sh --no-skills --bootstrap-file "$root/bootstrap.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule
 grep -q '# Updated bootstrap' "$CLAUDE_CONFIG_DIR/CLAUDE.md"
 
 for invalid in '[]' 'null' 'false' '{"mcpServers":[]}' '{"mcpServers":{"knowledge":{"type":"http","url":"https://other.example/mcp"}}}' '{"mcpServers":{"knowledge":{"url":"https://knowledge.test/mcp/knowledge"}}}'; do
   printf '%s\n' "$invalid" > "$CLAUDE_CONFIG_DIR/.claude.json"
-  if ./install.sh --bootstrap-file "$root/bootstrap.md" --target "$root/target.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule > "$root/output.txt" 2>&1; then
+  if ./install.sh --no-skills --bootstrap-file "$root/bootstrap.md" --target "$root/target.md" --no-alias --no-codex-mcp --no-cursor-mcp --no-cursor-rule > "$root/output.txt" 2>&1; then
     echo 'Expected invalid Claude config to fail.' >&2
     exit 1
   fi

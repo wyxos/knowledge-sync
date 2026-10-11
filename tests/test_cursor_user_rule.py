@@ -169,11 +169,11 @@ class InstallerTests(unittest.TestCase):
             bootstrap.write_text("# Café — 知识", encoding="utf-8")
             if sys.platform == "win32":
                 command = ["pwsh", "-NoProfile", "-File", str(ROOT / "install.ps1"),
-                           "-BootstrapFile", str(bootstrap), "-NoAlias", "-NoCodexMcp", "-NoClaudeMcp"]
+                           "-BootstrapFile", str(bootstrap), "-NoSkills", "-NoAlias", "-NoCodexMcp", "-NoClaudeMcp"]
                 preview = "-WhatIf"
             else:
                 command = ["bash", str(ROOT / "install.sh"), "--bootstrap-file", str(bootstrap),
-                           "--no-alias", "--no-codex-mcp", "--no-claude-mcp"]
+                           "--no-skills", "--no-alias", "--no-codex-mcp", "--no-claude-mcp"]
                 preview = "--dry-run"
 
             def run(extra=()):

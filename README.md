@@ -1,6 +1,6 @@
 # Knowledge Sync
 
-Synchronize the private root bootstrap from a Knowledge MCP server for detected Codex, Claude Code, and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). Claude Code receives global `CLAUDE.md` under `CLAUDE_CONFIG_DIR` (default `~/.claude`). Cursor receives a dedicated **Knowledge MCP bootstrap** User Rule in its signed-in account, applying across projects and syncing across devices. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
+Synchronize the private root bootstrap from a Knowledge MCP server and install its bundled `knowledge-maintenance` skill for detected Codex, Claude Code, and Cursor installations. Codex receives `AGENTS.md` under `CODEX_HOME` (default `~/.codex`). Claude Code receives global `CLAUDE.md` under `CLAUDE_CONFIG_DIR` (default `~/.claude`). Cursor receives a dedicated **Knowledge MCP bootstrap** User Rule in its signed-in account, applying across projects and syncing across devices. Existing personal instructions are preserved; only the marked `KNOWLEDGE-MCP` block is managed.
 
 The Knowledge content and access token are never stored in this public repository.
 
@@ -89,6 +89,25 @@ On migration, the installer backs up the old managed `~/.cursor/rules/knowledge-
 
 When no explicit target is supplied, the installer detects Codex, Claude Code, and Cursor independently and updates each present harness. Claude detection looks for the `claude` CLI, `CLAUDE_CONFIG_DIR` / `~/.claude`, or its global `~/.claude.json` file. Codex detection looks for its CLI or home directory; Cursor detection also checks its desktop data directory. If none is found, pass `-Target` / `--target` explicitly.
 
+### Bundled Knowledge maintenance skill
+
+Every normal `knowledge-sync` run installs or updates the bundled skill alongside the bootstrap. The skill contains reusable record maintenance, linking, privacy review and synchronization procedures. It contains no personal Knowledge records, private account information or service credentials. Downloaded files and piped invocations are standalone: both installers embed the helper and skill payload, and do not fetch another repository at runtime.
+
+| Detected local harness | Skill discovery location |
+| --- | --- |
+| Codex or Cursor | `~/.agents/skills/knowledge-maintenance` (one shared copy) |
+| Claude Code | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/knowledge-maintenance` |
+
+These are native local discovery locations. [Codex](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills) and [Cursor](https://cursor.com/docs/skills#skill-directories) both discover the shared user skills directory. [Claude Code](https://code.claude.com/docs/en/skills) discovers its own personal skills directory. An existing link for the entire Claude skills root can share the same directory; the installer resolves roots and writes each physical target once. `CODEX_HOME` and `CURSOR_HOME` still select bootstrap/MCP output but do not move `~/.agents/skills`. `CURSOR_HOME` does not configure Cursor's own skill discovery. The installer never changes settings, permissions, account sync preferences or policies to enable skills. Older clients or policy-restricted sessions may require an update or local administrator action; local installation does not verify a running client's catalog or support remote/cloud skill discovery. Restart the relevant client and confirm the skill is visible.
+
+Python 3.8+ is required for managed skill setup on every platform. Missing harnesses are reported and skipped. `-NoSkills` / `--no-skills` explicitly skips skill setup; an explicit `-Target` / `--target` also skips it. MCP registration flags and Cursor rule flags remain independent. `-WhatIf` / `--dry-run` checks skill targets and prints the proposed locations without writing skill files.
+
+At installation, `references/service.json` is generated locally from `-Domain` / `--domain`; it contains only the base and MCP URLs. No URL is hard-coded in the skill. The files use owner-only permissions on Unix and inherit the destination's existing user-profile ACLs on Windows. The public source must not contain generated service metadata or private guidance.
+
+Each managed installation has a `.knowledge-sync.json` ownership manifest with SHA-256 checksums. An unchanged run leaves files and timestamps alone. An update verifies the current files, stages the new package, replaces the directory and reads the result back. A failed directory swap restores the previous installation. An unmanaged same-named skill, a conflicting copy in another native/legacy home, malformed ownership metadata, local edits, missing files, extra files or links inside the skill stop setup before bootstrap/MCP/profile changes. Existing content is left intact; explicitly preserve and migrate the conflicting skill or run with the skill skip option. The installer does not automatically adopt or overwrite personal copies. Keep custom procedures in a separately named skill rather than editing the managed package.
+
+The reviewable source is `skills/knowledge-maintenance/` and `knowledge_skill.py`. After changing either, run `python tools/embed_knowledge_skill.py`; `python tools/embed_knowledge_skill.py --check` checks both embedded copies for drift. Changes belong to this repository's source release, so the persistent command receives the new skill payload the next time it downloads the updated installer.
+
 ## Testing without a server
 
 Both installers accept a local bootstrap file and custom target:
@@ -101,4 +120,6 @@ Both installers accept a local bootstrap file and custom target:
 ./install.sh --bootstrap-file ./bootstrap.md --target ./tmp/AGENTS.md --no-alias --no-codex-mcp --no-claude-mcp --no-cursor-mcp
 ```
 
-Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule and migration tests, including an end-to-end run of the native installer. Run `tests/claude.ps1` on Windows or `bash tests/claude.sh` on macOS/Linux for Claude configuration checks. Run `bash tests/keychain.sh` to check that an inaccessible macOS Keychain entry does not trigger a new OAuth prompt. Test credentials and transport are isolated from the real accounts. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.
+Run `python -m unittest discover -s tests -p 'test_*.py' -v` for offline account-rule, migration and managed skill tests, including downloaded/piped native installer runs. Skill tests cover install/update, idempotency, URL binding, custom harness homes, all-target conflicts, local changes, safe rollback, skip/preview semantics and embedded payload drift. Link tests run when the host supports link creation. Fixtures use isolated homes and synthetic service URLs; tests never install skills in your real home. In a restricted sandbox, select a writable task-owned `TEMP` / `TMP` / `TMPDIR` before running the suite.
+
+Run `tests/claude.ps1` on Windows or `bash tests/claude.sh` on macOS/Linux for Claude configuration checks. Run `bash tests/keychain.sh` to check that an inaccessible macOS Keychain entry does not trigger a new OAuth prompt. Test credentials and transport are isolated from the real accounts. The account-rule helper is maintained in `cursor_user_rule.py` and embedded in both installers so downloaded and piped invocations remain standalone. After editing it, run `python tools/embed_cursor_rule.py`; CI checks that the copies match.

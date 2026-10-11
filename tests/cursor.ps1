@@ -13,7 +13,7 @@ $target = Join-Path $testRoot 'AGENTS.md'
 foreach ($invalid in @('[]', 'null', 'false', '{"mcpServers":[]}', '{"mcpServers":{"knowledge":{"url":"https://knowledge.test/mcp/knowledge","command":"local-server"}}}', '{"mcpServers":{"knowledge":{"url":"https://knowledge.test/MCP/knowledge"}}}')) {
     Set-Content $config $invalid
     try {
-        ./install.ps1 -BootstrapFile $bootstrap -Target $target -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule
+        ./install.ps1 -NoSkills -BootstrapFile $bootstrap -Target $target -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule
         throw 'Expected invalid Cursor configuration to fail'
     } catch {
         if ("$_" -notmatch 'not a JSON object|Refusing to replace') { throw }
@@ -22,11 +22,11 @@ foreach ($invalid in @('[]', 'null', 'false', '{"mcpServers":[]}', '{"mcpServers
 }
 
 Set-Content $config '{"mcpServers":{"other":{"command":"example","env":{"PRESERVE":"yes"}}},"custom":{"preserve":true}}'
-./install.ps1 -BootstrapFile $bootstrap -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule
+./install.ps1 -NoSkills -BootstrapFile $bootstrap -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule
 $saved = Get-Content -Raw $config
 $parsed = $saved | ConvertFrom-Json
 if ($parsed.mcpServers.other.env.PRESERVE -ne 'yes' -or $parsed.custom.preserve -ne $true) { throw 'Existing settings lost' }
-./install.ps1 -BootstrapFile $bootstrap -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule -WhatIf
+./install.ps1 -NoSkills -BootstrapFile $bootstrap -NoAlias -NoCodexMcp -NoClaudeMcp -NoCursorRule -WhatIf
 if ((Get-Content -Raw $config) -cne $saved) { throw 'Preview changed config' }
 
 Push-Location $testRoot
