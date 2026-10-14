@@ -9,7 +9,7 @@ Use the connected Knowledge service and its root guidance. This skill is shipped
 
 ## Select the work
 
-- For creating, updating or consolidating records, read [Record maintenance](references/records.md).
+- For creating, updating or consolidating records, read [Record maintenance](references/records.md) for destination, concise writing and verification.
 - For restoring a version or archiving obsolete content, read [Record maintenance](references/records.md#history-and-archive).
 - For Knowledge links and changed-text citations, read [Links](references/links.md).
 - For repository privacy review, read the service's applicable privacy guidance and [Privacy review](references/privacy-review.md).

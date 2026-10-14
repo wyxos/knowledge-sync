@@ -8,6 +8,16 @@ Source behavior alone does not repeal a stated product boundary. Distinguish cur
 
 Read every destination before changing it. Consolidation includes locating callers, moving each fact once, updating relevant pointers and preserving facts that still matter. Avoid empty companion files, speculative directories or new indexes where the service already provides routing.
 
+## Write concise records
+
+Keep current facts, settled decisions and the context needed to act. Use Product for purpose and capabilities, Engineering for implementation and operations, and Decisions for settled choices when that matches the service's organization. Keep small subjects together.
+
+Give each fact or rule one authoritative home. Knowledge holds service/project facts, decisions and permission boundaries; reusable writing and operating procedures belong in their owning skills. Keep executable mechanics with maintained scripts or contracts. When moving a procedure, verify the receiving skill and replace the copied instructions with a useful pointer; preserve local constraints beside it.
+
+Write directly, without repeated attribution or personal names unless identity, legal status or authorship matters. Preserve necessary account labels, addresses and other exact identifiers. Consolidate repeated explanations and retain rationale only where it affects current decisions.
+
+During updates, remove superseded incident narratives, completed migration logs, test counts and obsolete warnings from active prose when recoverable history preserves them. Temporary progress and tentative discussion stay in task artifacts. Preserve current evidence, uncertainty, permission boundaries and environment-specific constraints; brevity is not a reason to discard them. Explicit user direction can revise an earlier decision.
+
 ## Write and verify
 
 1. Confirm the change is verified, established or explicitly settled and belongs in durable Knowledge.
@@ -16,8 +26,6 @@ Read every destination before changing it. Consolidation includes locating calle
 4. Pass the latest expected_checksum. If rejected as stale, reread and reconcile the user's intended change against the new version. Do not overwrite the newer record.
 5. After an uncertain write, read the destination before retrying. Read successful writes back and verify the intended content, preserved context, links and callers.
 6. Report the affected documents with returned highlight_url links and useful limitations. A search index can lag the committed document; verify through direct reads rather than repeatedly searching for completion.
-
-Active records describe supported present facts and procedures. Keep temporary progress, assumptions, completed migration logs and obsolete warnings in task history or recoverable archives according to root guidance. A deployment/runbook record should preserve its actual environment-specific constraints.
 
 ## History and archive
 
