@@ -8,6 +8,14 @@ Source behavior alone does not repeal a stated product boundary. Distinguish cur
 
 Read every destination before changing it. Consolidation includes locating callers, moving each fact once, updating relevant pointers and preserving facts that still matter. Avoid empty companion files, speculative directories or new indexes where the service already provides routing.
 
+## Check procedure ownership before writing
+
+Before adding or expanding a procedure in Knowledge, inspect the available skill catalog and the service's skill/source record. Read the relevant candidate entrypoints and supporting references; a skill name or description alone does not establish whether it already covers the workflow.
+
+If a skill owns the procedure, reuse it. When the authorized task requires a missing or corrected step, update its maintained source through the applicable skill-maintenance workflow, verify it, then save a short pointer in Knowledge. Keep current project facts, decisions, permission boundaries and necessary local constraints beside that pointer. Inspect maintained scripts/contracts for executable mechanics rather than copying their recipe.
+
+Create a new skill only when there is no suitable owner, the procedure has a distinct reusable scope and the task authorizes skill creation. If the candidate skill or source cannot be inspected, report the ownership gap and keep the proposed procedure in task artifacts until resolved; do not silently save another durable copy.
+
 ## Write concise records
 
 Keep current facts, settled decisions and the context needed to act. Use Product for purpose and capabilities, Engineering for implementation and operations, and Decisions for settled choices when that matches the service's organization. Keep small subjects together.
