@@ -18,6 +18,8 @@ Create a new skill only when there is no suitable owner, the procedure has a dis
 
 ## Write concise records
 
+When the record defines agent behavior, apply [Agent guidance](agent-guidance.md); factual records do not need that authoring workflow.
+
 Keep current facts, settled decisions and the context needed to act. Use Product for purpose and capabilities, Engineering for implementation and operations, and Decisions for settled choices when that matches the service's organization. Keep small subjects together.
 
 Give each fact or rule one authoritative home. Knowledge holds service/project facts, decisions and permission boundaries; reusable writing and operating procedures belong in their owning skills. Keep executable mechanics with maintained scripts or contracts. When moving a procedure, verify the receiving skill and replace the copied instructions with a useful pointer; preserve local constraints beside it.

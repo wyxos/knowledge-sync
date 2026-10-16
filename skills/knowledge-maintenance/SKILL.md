@@ -10,6 +10,7 @@ Use the connected Knowledge service and its root guidance. This skill is shipped
 ## Select the work
 
 - For creating, updating or consolidating records, read [Record maintenance](references/records.md) for existing skill ownership, destination, concise writing and verification.
+- When a record creates or changes instructions for agents, also read [Agent guidance](references/agent-guidance.md) for scoped triggers, contextual references and completion boundaries.
 - For restoring a version or archiving obsolete content, read [Record maintenance](references/records.md#history-and-archive).
 - For Knowledge links and changed-text citations, read [Links](references/links.md).
 - For repository privacy review, read the service's applicable privacy guidance and [Privacy review](references/privacy-review.md).
