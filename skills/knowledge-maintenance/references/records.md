@@ -8,6 +8,8 @@ Source behavior alone does not repeal a stated product boundary. Distinguish cur
 
 Read every destination before changing it. Consolidation includes locating callers, moving each fact once, updating relevant pointers and preserving facts that still matter. Avoid empty companion files, speculative directories or new indexes where the service already provides routing.
 
+When an edit changes a shared fact, permission, constraint or procedure, inspect relevant linked and referring documents and search the changed subject and its old and new values. Reconcile affected statements within the authorized scope, preserve intentional exceptions, and report unresolved references or contradictions. Keep wording-only corrections local unless their meaning or links change.
+
 ## Check procedure ownership before writing
 
 Before adding or expanding a procedure in Knowledge, inspect the available skill catalog and the service's skill/source record. Read the relevant candidate entrypoints and supporting references; a skill name or description alone does not establish whether it already covers the workflow.
