@@ -4,6 +4,8 @@ Use this when writing or revising instructions that agents will follow. For ordi
 
 Keep always-loaded text focused on the decisions it changes. Name the workflow and the task that should trigger it; avoid keyword lists that draw in unrelated work. Point to architecture, schema, operations or other detail when that task needs it, rather than requiring every document before every edit.
 
+Keep repository-local instructions limited to portable project contracts. Apply [repository privacy review](privacy-review.md) before copying context from private Knowledge: personal operating profiles, bootstrap content, client identities and machine/deployment runbooks belong in their private source, not project guidance.
+
 Keep shared constraints visible. Put substantial branch-specific procedures behind explicit, conditional references; a short self-contained instruction needs no extra router. Maintain one owner for each procedure and link to current scripts or contracts for executable mechanics.
 
 State the required outcome, evidence of completion and real stopping boundaries. Continue authorized work through verification without inventing intermediate approval gates. Preserve privacy, credentials, data isolation, required QA and release permissions. Instructions shared across models must retain constraints those models still need.
